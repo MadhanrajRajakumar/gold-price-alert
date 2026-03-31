@@ -1,0 +1,63 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                Int           @id @default(autoincrement())
+  email             String        @unique
+  telegram_chat_id  String?
+  last_payment_date DateTime?
+  created_at        DateTime      @default(now())
+  goldPrices        GoldPrice[]
+  alertLogs         AlertLog[]
+  activityLogs      ActivityLog[]
+  sessions          Session[]
+}
+
+model Session {
+  id         Int      @id @default(autoincrement())
+  token      String   @unique
+  created_at DateTime @default(now())
+  expires_at DateTime
+  user_id    Int
+  user       User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+}
+
+model GoldPrice {
+  id              Int      @id @default(autoincrement())
+  date            DateTime
+  price_per_gram  Float
+  source          String   @default("system")
+  manual_override Boolean  @default(false)
+  user_id         Int
+  user            User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([user_id, date])
+}
+
+model AlertLog {
+  id         Int      @id @default(autoincrement())
+  alert_date DateTime
+  condition  String
+  sent_at    DateTime @default(now())
+  status     String
+  details    String?
+  user_id    Int
+  user       User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([user_id, alert_date, condition])
+}
+
+model ActivityLog {
+  id         Int      @id @default(autoincrement())
+  event_type String
+  created_at DateTime @default(now())
+  details    String
+  user_id    Int
+  user       User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+}

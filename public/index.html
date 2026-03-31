@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Gold Price Alert</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section id="authView" class="auth-view">
+        <div class="card auth-card">
+          <p class="eyebrow">Gold Price Alert</p>
+          <h1>Login with email</h1>
+          <p class="subtext">
+            Minimal session login for your own gold-price dashboard and alerts.
+          </p>
+          <form id="loginForm" class="form-card">
+            <label class="field">
+              <span>Email</span>
+              <input id="loginEmail" type="email" placeholder="you@example.com" required />
+            </label>
+            <button type="submit" class="button">Continue</button>
+          </form>
+          <p id="authMessage" class="flash-message" aria-live="polite"></p>
+        </div>
+      </section>
+
+      <section id="appView" class="app-view hidden">
+        <header class="header">
+          <div>
+            <p class="eyebrow">Gold Price Alert</p>
+            <h1>Should you pay today?</h1>
+            <p id="userMeta" class="subtext"></p>
+          </div>
+          <button id="logoutButton" class="button secondary">Logout</button>
+        </header>
+
+        <section id="decisionHero" class="decision-hero">
+          <p class="decision-caption">Main decision</p>
+          <h2 id="decisionLabel">Loading...</h2>
+          <p id="decisionMessage" class="decision-text"></p>
+          <div class="decision-score">
+            <span>Decision score</span>
+            <strong id="decisionScore">-</strong>
+          </div>
+        </section>
+
+        <section class="metrics-grid">
+          <article class="card">
+            <p class="label">Today's price</p>
+            <h3 id="todayPrice">Loading...</h3>
+            <p id="todayMeta" class="meta"></p>
+          </article>
+
+          <article class="card">
+            <p class="label">30-day low</p>
+            <h3 id="lowestPrice">-</h3>
+            <p id="lowestDate" class="meta"></p>
+          </article>
+
+          <article class="card">
+            <p class="label">Missed opportunity</p>
+            <h3 id="missedSavings">-</h3>
+            <p id="differenceMeta" class="meta"></p>
+          </article>
+
+          <article class="card">
+            <p class="label">Payment window</p>
+            <h3 id="daysRemaining">-</h3>
+            <p id="paymentMeta" class="meta"></p>
+          </article>
+        </section>
+
+        <section class="card chart-card">
+          <div class="section-header">
+            <div>
+              <p class="label">Recent trend</p>
+              <h3>Your last stored 30 days</h3>
+            </div>
+          </div>
+          <svg id="priceChart" viewBox="0 0 760 240" role="img" aria-label="Gold price chart"></svg>
+          <div id="chartLabels" class="chart-labels"></div>
+        </section>
+
+        <section class="forms-grid">
+          <form id="manualPriceForm" class="card form-card">
+            <div class="section-header">
+              <div>
+                <p class="label">Manual override</p>
+                <h3>Set today's price</h3>
+              </div>
+            </div>
+            <label class="field">
+              <span>Price per gram (INR)</span>
+              <input id="manualPriceInput" name="price_per_gram" type="number" step="0.01" min="0" placeholder="13528" required />
+            </label>
+            <button type="submit" class="button">Save manual price</button>
+          </form>
+
+          <form id="paymentDateForm" class="card form-card">
+            <div class="section-header">
+              <div>
+                <p class="label">Payment window</p>
+                <h3>Last payment date</h3>
+              </div>
+            </div>
+            <label class="field">
+              <span>Date</span>
+              <input id="paymentDateInput" name="last_payment_date" type="date" required />
+            </label>
+            <button type="submit" class="button secondary">Save payment date</button>
+          </form>
+
+          <form id="telegramForm" class="card form-card">
+            <div class="section-header">
+              <div>
+                <p class="label">Telegram</p>
+                <h3>Connect chat ID</h3>
+              </div>
+            </div>
+            <label class="field">
+              <span>Telegram chat ID</span>
+              <input id="telegramChatIdInput" name="telegram_chat_id" type="text" placeholder="123456789" required />
+            </label>
+            <button type="submit" class="button secondary">Save Telegram ID</button>
+          </form>
+        </section>
+
+        <section class="card log-card">
+          <div class="section-header">
+            <div>
+              <p class="label">Recent log</p>
+              <h3>Your alerts and overrides</h3>
+            </div>
+          </div>
+          <ul id="activityList" class="activity-list"></ul>
+        </section>
+
+        <p id="flashMessage" class="flash-message" aria-live="polite"></p>
+      </section>
+    </main>
+
+    <script src="/script.js"></script>
+  </body>
+</html>
