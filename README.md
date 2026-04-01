@@ -1,6 +1,6 @@
 # gold-price-alert
 
-Minimal multi-user, SaaS-ready version of the gold alert app using Node.js, Express, Prisma, SQLite, cookie sessions, email alerts, and Telegram alerts.
+Minimal multi-user, SaaS-ready version of the gold alert app using Node.js, Express, Prisma, PostgreSQL, cookie sessions, email alerts, and Telegram alerts.
 
 ## What changed
 
@@ -49,6 +49,26 @@ Alerts are sent per user when:
 
 Alerts are deduplicated per user, per day, per condition.
 
+## Supabase setup
+
+1. Create a Supabase project manually.
+2. Copy the pooled connection string into `DATABASE_URL`.
+3. Copy the direct connection string into `DIRECT_URL`.
+4. Run:
+
+   ```bash
+   npx prisma generate
+   npx prisma migrate dev --name init
+   ```
+
+5. Start the app:
+
+   ```bash
+   npm run dev
+   ```
+
+The server now expects Prisma migrations to own table creation. The old SQLite bootstrap path has been removed.
+
 ## Setup
 
 1. Install dependencies:
@@ -79,6 +99,7 @@ Alerts are deduplicated per user, per day, per condition.
 
 - `PORT`
 - `DATABASE_URL`
+- `DIRECT_URL`
 - `CRON_SCHEDULE`
 - `FALLBACK_PRICE_PER_GRAM`
 - `SMTP_HOST`

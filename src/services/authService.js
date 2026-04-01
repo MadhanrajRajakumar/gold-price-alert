@@ -36,6 +36,10 @@ function buildCookie(name, value, options = {}) {
     parts.push(`Max-Age=${options.maxAge}`);
   }
 
+  if (options.secure) {
+    parts.push("Secure");
+  }
+
   return parts.join("; ");
 }
 
@@ -57,6 +61,8 @@ async function createUserSession(user, response) {
     "Set-Cookie",
     buildCookie(SESSION_COOKIE_NAME, token, {
       maxAge: SESSION_TTL_DAYS * 24 * 60 * 60,
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
     }),
   );
 }
@@ -75,6 +81,8 @@ async function clearUserSession(request, response) {
     "Set-Cookie",
     buildCookie(SESSION_COOKIE_NAME, "", {
       maxAge: 0,
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
     }),
   );
 }
