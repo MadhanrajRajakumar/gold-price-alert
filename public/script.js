@@ -1,7 +1,35 @@
-let dashboardState = null;
-let chartInstance = null;
-let selectedRange = "1M";
-let onboardingIndex = 0;
+const app = document.getElementById("app");
+
+const state = {
+  user: null,
+  dashboard: null,
+  alerts: [],
+  nextTrigger: null,
+  selectedRange: "1M",
+  onboardingIndex: 0,
+  chart: null,
+  settingsOpen: false,
+  flashMessage: "",
+  flashType: "",
+  authMessage: "",
+  authType: "",
+};
+
+const onboardingScreens = [
+  "You are overpaying gold every month",
+  "Gold price changes daily - you miss the lowest",
+  "We track and tell you when to pay",
+  "Start tracking gold price",
+];
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
 
 function formatCurrency(value) {
   if (value === null || value === undefined || Number.isNaN(Number(value))) {
@@ -12,10 +40,24 @@ function formatCurrency(value) {
     style: "currency",
     currency: "INR",
     maximumFractionDigits: 2,
-  }).format(value);
+  }).format(Number(value));
+}
+
+function formatSignedCurrency(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) {
+    return "-";
+  }
+
+  const numeric = Number(value);
+  const sign = numeric > 0 ? "+" : numeric < 0 ? "-" : "";
+  return `${sign}${formatCurrency(Math.abs(numeric))}`;
 }
 
 function formatDateLabel(isoDate) {
+  if (!isoDate) {
+    return "-";
+  }
+
   return new Intl.DateTimeFormat("en-IN", {
     day: "2-digit",
     month: "short",
@@ -25,26 +67,18 @@ function formatDateLabel(isoDate) {
 }
 
 function formatTimestamp(isoDate) {
+  if (!isoDate) {
+    return "";
+  }
+
   return new Intl.DateTimeFormat("en-IN", {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(isoDate));
 }
 
-function setFlashMessage(message, type = "", targetId = "flashMessage") {
-  const flash = document.getElementById(targetId);
-  if (!flash) {
-    return;
-  }
-
-  flash.textContent = message || "";
-  flash.className = `flash-message ${type}`.trim();
-}
-
-function hideAllViews() {
-  document.getElementById("authView").classList.add("hidden");
-  document.getElementById("onboardingView").classList.add("hidden");
-  document.getElementById("appView").classList.add("hidden");
+function buildFlashHtml(message, type) {
+  return `<p class="flash ${type || ""}">${escapeHtml(message || "")}</p>`;
 }
 
 async function requestJson(url, options) {
@@ -71,105 +105,476 @@ async function requestJson(url, options) {
   return data;
 }
 
-function showAuthView() {
-  hideAllViews();
-  document.getElementById("authView").classList.remove("hidden");
-}
-
-function showOnboardingView() {
-  hideAllViews();
-  document.getElementById("onboardingView").classList.remove("hidden");
-}
-
-function showAppView() {
-  hideAllViews();
-  document.getElementById("appView").classList.remove("hidden");
-}
-
-function renderAlertHistory(items) {
-  const list = document.getElementById("activityList");
-
-  if (!items.length) {
-    list.innerHTML = "<li>No alerts sent yet.</li>";
-    return;
-  }
-
-  list.innerHTML = items
-    .map(
-      (item) =>
-        `<li>${formatTimestamp(item.sent_at)} | ${item.type} | ${item.message}</li>`,
-    )
-    .join("");
-}
-
-function renderTelegramStatus(user) {
-  const status = document.getElementById("telegramStatus");
-  const button = document.getElementById("telegramConnectButton");
-
-  if (user.telegram_verified) {
-    status.textContent = "Connected";
-    button.textContent = "Reconnect Telegram";
-  } else if (user.telegram_chat_id) {
-    status.textContent = "Not connected - Reconnect Telegram";
-    button.textContent = "Reconnect Telegram";
-  } else {
-    status.textContent = "Not connected";
-    button.textContent = "Connect Telegram";
-  }
-}
-
-function renderOnboarding(onboarding) {
-  const screens = onboarding?.screens || [];
-  if (!screens.length) {
-    showAppView();
-    return;
-  }
-
-  document.getElementById("onboardingStep").textContent = `Screen ${
-    onboardingIndex + 1
-  } of ${screens.length}`;
-  document.getElementById("onboardingMessage").textContent =
-    screens[onboardingIndex];
-
-  const isLast = onboardingIndex === screens.length - 1;
-  document.getElementById("onboardingBackBtn").disabled = onboardingIndex === 0;
-  document.getElementById("onboardingNextBtn").classList.toggle("hidden", isLast);
-  document.getElementById("startBtn").classList.toggle("hidden", !isLast);
-}
-
 function destroyChart() {
-  if (chartInstance) {
-    chartInstance.destroy();
-    chartInstance = null;
+  if (state.chart) {
+    state.chart.destroy();
+    state.chart = null;
   }
 }
 
-function renderChart(chartData) {
-  const canvas = document.getElementById("goldChart");
-  const context = canvas.getContext("2d");
-  const points = chartData?.points || [];
-  const chartMeta = document.getElementById("chartMeta");
+function getPriceChangeMetrics(dashboard) {
+  const livePrice = dashboard?.live_price?.price_per_gram;
+  const points = dashboard?.chart?.points || [];
+  if (!livePrice || !points.length) {
+    return {
+      delta: null,
+      label: "Historical chart available",
+      className: "",
+    };
+  }
 
+  const average =
+    points.reduce((sum, point) => sum + Number(point.price_per_gram || 0), 0) / points.length;
+  const delta = Number(livePrice) - average;
+  const className = delta < 0 ? "positive" : delta > 0 ? "negative" : "";
+  const label =
+    delta < 0
+      ? "Below 30-day average"
+      : delta > 0
+        ? "Above 30-day average"
+        : "At 30-day average";
+
+  return { delta, label, className };
+}
+
+function getDecisionPresentation(dashboard) {
+  const label = dashboard?.decision?.label || "WAIT";
+  const score = Number(dashboard?.decision?.score ?? 5);
+  const confidence = Math.max(0, Math.min(100, Math.round(score * 10)));
+  const lower = label.toLowerCase();
+
+  let headline = "WAIT";
+  let tone = "wait";
+  if (lower.includes("pay")) {
+    headline = "BUY";
+    tone = "buy";
+  } else if (lower.includes("overdue")) {
+    headline = "ACT NOW";
+    tone = "overdue";
+  }
+
+  return {
+    headline,
+    tone,
+    confidence,
+  };
+}
+
+function getDecisionSupport(dashboard) {
+  const { delta, label } = getPriceChangeMetrics(dashboard);
+  if (delta === null) {
+    return dashboard?.live_price?.live_error || "Live data unavailable";
+  }
+
+  return `${label} by ${formatSignedCurrency(delta)}.`;
+}
+
+function getDaysLeftCard(paymentWindow, paymentWarning) {
+  if (!paymentWindow) {
+    return {
+      value: "Not set",
+      meta: paymentWarning || "Add your last payment date in settings",
+    };
+  }
+
+  if (paymentWindow.isOverdue) {
+    return {
+      value: "Overdue",
+      meta: `Due ${formatDateLabel(paymentWindow.nextDueDate)}`,
+    };
+  }
+
+  return {
+    value: String(paymentWindow.daysLeft),
+    meta: `Due ${formatDateLabel(paymentWindow.nextDueDate)}`,
+  };
+}
+
+function renderLogin() {
+  app.innerHTML = `
+    <main class="screen auth-screen">
+      <section class="card panel auth-card">
+        <p class="eyebrow">Gold Price Alert</p>
+        <div class="brand">
+          <h1 class="title">Login with email</h1>
+          <p class="subtitle">Minimal access to your buy signal and gold timing dashboard.</p>
+        </div>
+        <form id="loginForm" class="form-stack">
+          <div class="field">
+            <label for="loginEmail">Email</label>
+            <input id="loginEmail" type="email" placeholder="you@example.com" required />
+          </div>
+          <button type="submit" class="primary-button">Continue</button>
+        </form>
+        ${buildFlashHtml(state.authMessage, state.authType)}
+      </section>
+    </main>
+  `;
+
+  document.getElementById("loginForm").addEventListener("submit", handleLoginSubmit);
+}
+
+function renderOnboarding() {
+  const step = state.onboardingIndex + 1;
+  const progress = (step / onboardingScreens.length) * 100;
+  const isLast = state.onboardingIndex === onboardingScreens.length - 1;
+
+  app.innerHTML = `
+    <main class="screen onboarding-screen">
+      <section class="card onboarding-card">
+        <p class="eyebrow">Gold Price Alert</p>
+        <div class="progress"><span style="width:${progress}%"></span></div>
+        <div class="onboarding-copy">
+          <p class="meta">Step ${step} of ${onboardingScreens.length}</p>
+          <h1>${escapeHtml(onboardingScreens[state.onboardingIndex])}</h1>
+          <p class="subtitle">We turn price noise into one clear call: buy now or wait.</p>
+        </div>
+        <div class="row-between">
+          <button id="onboardingBack" type="button" class="ghost-button" ${
+            state.onboardingIndex === 0 ? "disabled" : ""
+          }>Back</button>
+          ${
+            isLast
+              ? '<button id="startBtn" type="button" class="primary-button">Start tracking gold price</button>'
+              : '<button id="onboardingNext" type="button" class="primary-button">Next</button>'
+          }
+        </div>
+      </section>
+    </main>
+  `;
+
+  const back = document.getElementById("onboardingBack");
+  if (back) {
+    back.addEventListener("click", () => {
+      if (state.onboardingIndex > 0) {
+        state.onboardingIndex -= 1;
+        renderApp();
+      }
+    });
+  }
+
+  const next = document.getElementById("onboardingNext");
+  if (next) {
+    next.addEventListener("click", () => {
+      if (state.onboardingIndex < onboardingScreens.length - 1) {
+        state.onboardingIndex += 1;
+        renderApp();
+      }
+    });
+  }
+
+  const start = document.getElementById("startBtn");
+  if (start) {
+    start.addEventListener("click", completeOnboarding);
+  }
+}
+
+function getSettingsHtml(dashboard) {
+  const user = dashboard?.user || {};
+  const alerts = state.alerts || [];
+  const nextAlertLabel = state.nextTrigger?.label || user.next_trigger_label || "";
+  const telegramStatus = user.telegram_verified
+    ? "Connected"
+    : user.telegram_chat_id
+      ? "Reconnect Telegram"
+      : "Not connected";
+
+  return `
+    <div class="drawer-backdrop" id="settingsBackdrop">
+      <aside class="card drawer" role="dialog" aria-modal="true" aria-label="Settings">
+        <div class="drawer-header">
+          <div>
+            <p class="eyebrow">Settings</p>
+            <h2>Alerts and controls</h2>
+          </div>
+          <button id="closeSettings" type="button" class="ghost-button">Close</button>
+        </div>
+
+        <section class="drawer-section">
+          <div class="row-between">
+            <div>
+              <p class="meta">Telegram</p>
+              <strong>${escapeHtml(telegramStatus)}</strong>
+            </div>
+            <span class="badge ${user.telegram_verified ? "success" : "warning"}">${escapeHtml(
+              nextAlertLabel || "Daily alerts at 9:00 AM",
+            )}</span>
+          </div>
+          <form id="telegramForm" class="form-stack">
+            <div class="field">
+              <label for="telegramChatIdInput">Telegram chat ID</label>
+              <input
+                id="telegramChatIdInput"
+                type="text"
+                value="${escapeHtml(user.telegram_chat_id || "")}"
+                placeholder="123456789"
+                required
+              />
+            </div>
+            <button type="submit" class="primary-button">${
+              user.telegram_verified ? "Reconnect Telegram" : "Connect Telegram"
+            }</button>
+          </form>
+        </section>
+
+        <section class="drawer-section">
+          <form id="paymentDateForm" class="form-stack">
+            <div class="field">
+              <label for="paymentDateInput">Last payment date</label>
+              <input
+                id="paymentDateInput"
+                type="date"
+                value="${escapeHtml(dashboard?.paymentWindow?.lastPaymentDate || user.last_payment_date || "")}"
+                required
+              />
+            </div>
+            <button type="submit" class="ghost-button">Save payment date</button>
+          </form>
+        </section>
+
+        <section class="drawer-section">
+          <form id="cityForm" class="form-stack">
+            <div class="field">
+              <label for="cityInput">History city</label>
+              <select id="cityInput">
+                ${["Chennai", "Mumbai", "Delhi"]
+                  .map(
+                    (city) =>
+                      `<option value="${city}" ${user.city === city ? "selected" : ""}>${city}</option>`,
+                  )
+                  .join("")}
+              </select>
+            </div>
+            <button type="submit" class="ghost-button">Save city</button>
+          </form>
+        </section>
+
+        <section class="drawer-section">
+          <form id="manualPriceForm" class="form-stack">
+            <div class="field">
+              <label for="manualPriceInput">Manual price per gram</label>
+              <input id="manualPriceInput" type="number" step="0.01" min="0" placeholder="13872" required />
+            </div>
+            <button type="submit" class="ghost-button">Save manual price</button>
+          </form>
+        </section>
+
+        <section class="drawer-section">
+          <div class="row-between">
+            <div>
+              <p class="meta">Recent alerts</p>
+              <strong>History</strong>
+            </div>
+          </div>
+          <ul class="list">
+            ${
+              alerts.length
+                ? alerts
+                    .slice(0, 6)
+                    .map(
+                      (item) =>
+                        `<li>${escapeHtml(formatTimestamp(item.sent_at))}<br />${escapeHtml(item.message)}</li>`,
+                    )
+                    .join("")
+                : "<li>No alerts sent yet.</li>"
+            }
+          </ul>
+        </section>
+
+        ${buildFlashHtml(state.flashMessage, state.flashType)}
+
+        <button id="logoutButton" type="button" class="ghost-button">Logout</button>
+      </aside>
+    </div>
+  `;
+}
+
+function renderDashboard() {
+  const dashboard = state.dashboard;
+  const live = dashboard.live_price || {};
+  const priceMetrics = getPriceChangeMetrics(dashboard);
+  const decision = getDecisionPresentation(dashboard);
+  const daysLeft = getDaysLeftCard(dashboard.paymentWindow, dashboard.paymentWarning);
+  const liveAvailable = Boolean(live.is_live_available);
+
+  app.innerHTML = `
+    <main class="screen">
+      <div class="shell">
+        <header class="topbar">
+          <div class="brand">
+            <p class="eyebrow">Gold Price Alert</p>
+            <h1 class="title">Should you buy today?</h1>
+            <p class="subtitle">${escapeHtml(
+              liveAvailable
+                ? `${dashboard.user.email} • ${dashboard.user.city} history`
+                : "Historical trend is still available while live pricing is offline",
+            )}</p>
+          </div>
+          <div class="row-between">
+            <button id="refreshPriceBtn" type="button" class="primary-button">Refresh Price</button>
+            <button id="openSettings" type="button" class="ghost-button">Settings</button>
+          </div>
+        </header>
+
+        <section class="card panel">
+          <div class="brand">
+            <div class="headline-price">
+              <strong>${escapeHtml(
+                liveAvailable ? formatCurrency(live.price_per_gram) : "LIVE DATA UNAVAILABLE",
+              )}</strong>
+              <span class="change-pill ${priceMetrics.className}">${
+                priceMetrics.delta === null
+                  ? escapeHtml(priceMetrics.label)
+                  : `${escapeHtml(formatSignedCurrency(priceMetrics.delta))} • ${escapeHtml(priceMetrics.label)}`
+              }</span>
+            </div>
+            <div class="footer-note">
+              ${
+                live.freshness_label
+                  ? `<span class="meta">${escapeHtml(live.freshness_label)}</span>`
+                  : '<span class="meta">Last updated unavailable</span>'
+              }
+              ${
+                live.delayed_message
+                  ? `<span class="badge warning">${escapeHtml(live.delayed_message)}</span>`
+                  : ""
+              }
+              ${
+                live.live_error
+                  ? `<span class="badge error">${escapeHtml(live.live_error)}</span>`
+                  : ""
+              }
+            </div>
+          </div>
+        </section>
+
+        <section class="card decision-card panel ${decision.tone}">
+          <p class="eyebrow">Decision</p>
+          <h2>${escapeHtml(decision.headline)}</h2>
+          <div class="decision-support">
+            <strong>Confidence: ${decision.confidence}%</strong>
+            <p class="subtitle">${escapeHtml(getDecisionSupport(dashboard))}</p>
+            <p class="meta">${escapeHtml(dashboard.decision.message || dashboard.message || "")}</p>
+          </div>
+        </section>
+
+        <section class="card chart-card">
+          <div class="chart-header">
+            <div>
+              <p class="eyebrow">Trend</p>
+              <h3>30-day price context</h3>
+            </div>
+            <div class="range-selector">
+              ${["1W", "1M", "3M", "6M", "1Y"]
+                .map(
+                  (range) =>
+                    `<button type="button" class="range-button ${
+                      state.selectedRange === range ? "active" : ""
+                    }" data-range="${range}">${range}</button>`,
+                )
+                .join("")}
+            </div>
+          </div>
+          <div class="chart-wrap">
+            <canvas id="goldChart" aria-label="Gold price chart"></canvas>
+          </div>
+          <p class="meta" id="chartMeta"></p>
+        </section>
+
+        <section class="stats-grid">
+          <article class="card stat-card panel">
+            <p class="stat-label">30-day low</p>
+            <div class="stat-value">${escapeHtml(formatCurrency(dashboard.chart.lowest?.price_per_gram))}</div>
+            <p class="meta">${escapeHtml(
+              dashboard.chart.lowest ? formatDateLabel(dashboard.chart.lowest.date) : "No data",
+            )}</p>
+          </article>
+
+          <article class="card stat-card panel">
+            <p class="stat-label">30-day high</p>
+            <div class="stat-value">${escapeHtml(formatCurrency(dashboard.chart.highest?.price_per_gram))}</div>
+            <p class="meta">${escapeHtml(
+              dashboard.chart.highest ? formatDateLabel(dashboard.chart.highest.date) : "No data",
+            )}</p>
+          </article>
+
+          <article class="card stat-card panel">
+            <p class="stat-label">Days left</p>
+            <div class="stat-value">${escapeHtml(daysLeft.value)}</div>
+            <p class="meta">${escapeHtml(daysLeft.meta)}</p>
+          </article>
+        </section>
+
+        ${buildFlashHtml(state.flashMessage, state.flashType)}
+      </div>
+      ${state.settingsOpen ? getSettingsHtml(dashboard) : ""}
+    </main>
+  `;
+
+  attachDashboardEvents();
+  renderChart();
+}
+
+function renderChart() {
   destroyChart();
 
-  if (!points.length) {
-    chartMeta.textContent = "No historical data yet.";
+  const canvas = document.getElementById("goldChart");
+  const chartMeta = document.getElementById("chartMeta");
+  if (!canvas || !state.dashboard?.chart?.points?.length) {
+    if (chartMeta) {
+      chartMeta.textContent = "No historical data yet.";
+    }
     return;
   }
 
-  chartInstance = new Chart(context, {
+  const context = canvas.getContext("2d");
+  const gradient = context.createLinearGradient(0, 0, 0, 220);
+  gradient.addColorStop(0, "rgba(212, 175, 55, 0.28)");
+  gradient.addColorStop(1, "rgba(212, 175, 55, 0.02)");
+
+  const points = state.dashboard.chart.points;
+  const lowestDate = state.dashboard.chart.lowest?.date;
+  const highestDate = state.dashboard.chart.highest?.date;
+  const todayDate = state.dashboard.chart.today?.date;
+
+  state.chart = new Chart(context, {
     type: "line",
     data: {
       labels: points.map((point) => formatDateLabel(point.date)),
       datasets: [
         {
-          data: points.map((point) => point.price_per_gram),
-          borderColor: "#6C4DD9",
+          data: points.map((point) => Number(point.price_per_gram)),
+          borderColor: "#D4AF37",
+          backgroundColor: gradient,
           tension: 0.4,
           fill: true,
-          backgroundColor: "rgba(108,77,217,0.1)",
-          pointRadius: 0,
           borderWidth: 3,
+          pointRadius(contextInfo) {
+            const point = points[contextInfo.dataIndex];
+            if (!point) {
+              return 0;
+            }
+
+            if (point.date === lowestDate || point.date === highestDate || point.date === todayDate) {
+              return 4;
+            }
+
+            return 0;
+          },
+          pointBackgroundColor(contextInfo) {
+            const point = points[contextInfo.dataIndex];
+            if (!point) {
+              return "#D4AF37";
+            }
+
+            if (point.date === lowestDate) {
+              return "#22C55E";
+            }
+            if (point.date === highestDate) {
+              return "#EF4444";
+            }
+            return "#D4AF37";
+          },
         },
       ],
     },
@@ -186,280 +591,253 @@ function renderChart(chartData) {
         },
         tooltip: {
           enabled: true,
+          backgroundColor: "#121826",
+          borderColor: "rgba(212, 175, 55, 0.22)",
+          borderWidth: 1,
+          titleColor: "#E5E7EB",
+          bodyColor: "#E5E7EB",
           callbacks: {
-            label(context) {
-              return `₹ ${context.parsed.y}`;
+            label(contextInfo) {
+              return `₹ ${contextInfo.parsed.y.toLocaleString("en-IN")}`;
             },
+          },
+        },
+      },
+      scales: {
+        x: {
+          ticks: {
+            color: "#9CA3AF",
+            maxRotation: 0,
+          },
+          grid: {
+            display: false,
+          },
+        },
+        y: {
+          ticks: {
+            color: "#9CA3AF",
+            callback(value) {
+              return `₹${Number(value).toLocaleString("en-IN")}`;
+            },
+          },
+          grid: {
+            color: "rgba(156, 163, 175, 0.08)",
           },
         },
       },
     },
   });
 
-  chartMeta.textContent = `Range ${chartData.range} | ${points.length} points | Lowest ${formatCurrency(
-    chartData.lowest?.price_per_gram,
-  )} | Highest ${formatCurrency(chartData.highest?.price_per_gram)}`;
+  if (chartMeta) {
+    chartMeta.textContent = `Low ${formatCurrency(
+      state.dashboard.chart.lowest?.price_per_gram,
+    )} • High ${formatCurrency(state.dashboard.chart.highest?.price_per_gram)}`;
+  }
 }
 
-function setActiveRange(range) {
-  selectedRange = range;
-  document.querySelectorAll(".range-button").forEach((button) => {
-    button.classList.toggle("active", button.dataset.range === range);
-  });
-}
-
-function renderLivePrice(live) {
-  document.getElementById("todayPrice").textContent = live.is_live_available
-    ? formatCurrency(live.price_per_gram)
-    : "LIVE DATA UNAVAILABLE";
-  document.getElementById("sourceList").textContent = live.is_live_available
-    ? `Source: ${live.source}`
-    : "Historical data remains available";
-  document.getElementById("priceFreshnessBadge").textContent =
-    live.freshness_label || "";
-  document.getElementById("priceWarningBadge").textContent =
-    live.live_error || live.delayed_message || "";
-  document.getElementById("priceWarningBadge").className = `flash-message ${
-    live.live_error ? "error" : live.delayed_message ? "success" : ""
-  }`.trim();
-}
-
-function renderDashboard(data, nextTrigger) {
-  dashboardState = data;
-
-  const decisionHero = document.getElementById("decisionHero");
-  const isPayToday = data.decision.label === "PAY TODAY";
-  decisionHero.classList.toggle("pay", isPayToday);
-
-  document.getElementById("userMeta").textContent = `${data.user.email} | ${data.user.city} history | national live rate`;
-  document.getElementById("nextAlertMeta").textContent =
-    nextTrigger?.label || data.user.next_trigger_label || "";
-  document.getElementById("decisionLabel").textContent = data.decision.label;
-  document.getElementById("decisionMessage").textContent = `${data.decision.message}. ${data.message}`;
-  document.getElementById("decisionScore").textContent =
-    data.decision.score === null || data.decision.score === undefined
-      ? "N/A"
-      : `${data.decision.score}/10`;
-
-  renderLivePrice(data.live_price);
-
-  document.getElementById("lowestPrice").textContent = formatCurrency(
-    data.chart.lowest?.price_per_gram,
-  );
-  document.getElementById("lowestDate").textContent = data.chart.lowest
-    ? `Recorded on ${formatDateLabel(data.chart.lowest.date)}`
-    : "No low available";
-
-  document.getElementById("highestPrice").textContent = formatCurrency(
-    data.chart.highest?.price_per_gram,
-  );
-  document.getElementById("highestDate").textContent = data.chart.highest
-    ? `Recorded on ${formatDateLabel(data.chart.highest.date)}`
-    : "No high available";
-
-  if (data.paymentWindow) {
-    document.getElementById("daysRemaining").textContent = data.paymentWindow.isOverdue
-      ? "Payment overdue"
-      : `Days left: ${data.paymentWindow.daysLeft}`;
-    document.getElementById("paymentMeta").textContent = `Next payment due: ${formatDateLabel(
-      data.paymentWindow.nextDueDate,
-    )} | Last payment: ${formatDateLabel(data.paymentWindow.lastPaymentDate)}`;
-    document.getElementById("paymentDateInput").value =
-      data.paymentWindow.lastPaymentDate;
-  } else {
-    document.getElementById("daysRemaining").textContent = "Not set";
-    document.getElementById("paymentMeta").textContent =
-      data.paymentWarning || "Add your last payment date below";
-    document.getElementById("paymentDateInput").value =
-      data.user.last_payment_date || "";
+function attachDashboardEvents() {
+  const refresh = document.getElementById("refreshPriceBtn");
+  if (refresh) {
+    refresh.addEventListener("click", refreshPrice);
   }
 
-  document.getElementById("telegramChatIdInput").value =
-    data.user.telegram_chat_id || "";
-  document.getElementById("cityInput").value = data.user.city || "Chennai";
-  document.getElementById("telegramNextTrigger").textContent =
-    nextTrigger?.label || data.user.next_trigger_label || "";
+  const openSettings = document.getElementById("openSettings");
+  if (openSettings) {
+    openSettings.addEventListener("click", () => {
+      state.settingsOpen = true;
+      renderApp();
+    });
+  }
 
-  renderTelegramStatus(data.user);
-  setActiveRange(data.chart.range || selectedRange);
-  renderChart(data.chart);
-}
+  document.querySelectorAll(".range-button").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const range = button.dataset.range;
+      if (range && range !== state.selectedRange) {
+        state.selectedRange = range;
+        await loadTrend(range);
+      }
+    });
+  });
 
-async function loadTrend(range) {
-  const trend = await requestJson(`/api/me/trends?range=${encodeURIComponent(range)}`);
-  if (!dashboardState) {
+  if (!state.settingsOpen) {
     return;
   }
 
-  dashboardState.chart = trend;
-  setActiveRange(trend.range);
-  renderChart(trend);
+  const closeSettings = document.getElementById("closeSettings");
+  if (closeSettings) {
+    closeSettings.addEventListener("click", () => {
+      state.settingsOpen = false;
+      renderApp();
+    });
+  }
+
+  const backdrop = document.getElementById("settingsBackdrop");
+  if (backdrop) {
+    backdrop.addEventListener("click", (event) => {
+      if (event.target.id === "settingsBackdrop") {
+        state.settingsOpen = false;
+        renderApp();
+      }
+    });
+  }
+
+  document.getElementById("telegramForm")?.addEventListener("submit", handleTelegramSubmit);
+  document.getElementById("paymentDateForm")?.addEventListener("submit", handlePaymentDateSubmit);
+  document.getElementById("cityForm")?.addEventListener("submit", handleCitySubmit);
+  document.getElementById("manualPriceForm")?.addEventListener("submit", handleManualPriceSubmit);
+  document.getElementById("logoutButton")?.addEventListener("click", handleLogout);
 }
 
-async function loadDashboard(range = selectedRange) {
+function renderApp() {
+  destroyChart();
+
+  if (!state.user || !state.user.email) {
+    renderLogin();
+    return;
+  }
+
+  if (!state.user.onboardingCompleted) {
+    renderOnboarding();
+    return;
+  }
+
+  renderDashboard();
+}
+
+async function loadTrend(range) {
+  try {
+    const trend = await requestJson(`/api/me/trends?range=${encodeURIComponent(range)}`);
+    state.dashboard.chart = trend;
+    state.selectedRange = trend.range || range;
+    renderApp();
+  } catch (error) {
+    state.flashMessage = error.message;
+    state.flashType = "error";
+    renderApp();
+  }
+}
+
+async function loadDashboard(range = state.selectedRange) {
   const [dashboard, alerts, nextTrigger] = await Promise.all([
     requestJson(`/api/me/dashboard?range=${encodeURIComponent(range)}`),
     requestJson("/api/alerts"),
     requestJson("/api/next-trigger"),
   ]);
 
-  renderDashboard(dashboard, nextTrigger);
-  renderAlertHistory(alerts);
-  showAppView();
+  state.dashboard = dashboard;
+  state.alerts = alerts;
+  state.nextTrigger = nextTrigger;
+  state.user = dashboard.user;
+  state.selectedRange = dashboard.chart?.range || range;
 }
 
-async function bootstrapApp() {
+async function initApp() {
+  state.flashMessage = "";
+  state.flashType = "";
+
   try {
     const auth = await requestJson("/api/auth/me");
+    state.user = auth.user;
 
-    if (!auth.user.onboardingCompleted) {
-      dashboardState = {
-        onboarding: {
-          screens: [
-            "You are overpaying gold every month",
-            "Gold price changes daily - you miss the lowest",
-            "We track and tell you when to pay",
-            "Start saving money",
-          ],
-        },
-      };
-      onboardingIndex = 0;
-      renderOnboarding(dashboardState.onboarding);
-      showOnboardingView();
+    if (!state.user.onboardingCompleted) {
+      renderApp();
       return;
     }
 
-    await loadDashboard();
+    await loadDashboard(state.selectedRange);
+    renderApp();
   } catch (error) {
+    destroyChart();
     if (error.statusCode === 401) {
-      showAuthView();
+      state.user = null;
+      renderApp();
       return;
     }
 
-    setFlashMessage(error.message, "error", "authMessage");
+    state.authMessage = error.message;
+    state.authType = "error";
+    state.user = null;
+    renderApp();
+  }
+}
+
+async function handleLoginSubmit(event) {
+  event.preventDefault();
+  state.authMessage = "";
+  state.authType = "";
+
+  try {
+    const email = document.getElementById("loginEmail").value;
+    await requestJson("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ email }),
+    });
+    state.onboardingIndex = 0;
+    await initApp();
+  } catch (error) {
+    state.authMessage = error.message;
+    state.authType = "error";
+    renderApp();
+  }
+}
+
+async function completeOnboarding() {
+  try {
+    await requestJson("/api/onboarding/complete", {
+      method: "POST",
+    });
+    location.reload();
+  } catch (error) {
+    state.authMessage = error.message;
+    state.authType = "error";
+    renderApp();
   }
 }
 
 async function refreshPrice() {
   const button = document.getElementById("refreshPriceBtn");
-  const originalText = button.innerText;
+  if (!button) {
+    return;
+  }
 
+  const originalText = button.textContent;
   button.disabled = true;
-  button.innerText = "Refreshing...";
+  button.textContent = "Refreshing...";
 
   try {
-    const data = await requestJson("/api/refresh-price", {
+    const response = await requestJson("/api/refresh-price", {
       method: "POST",
     });
 
-    if (!data.success) {
-      setFlashMessage(data.error || "Failed to refresh price", "error");
-      return;
+    if (!response.success) {
+      throw new Error(response.error || "Failed to refresh price");
     }
 
-    renderLivePrice({
-      is_live_available: true,
-      price_per_gram: data.price,
-      source: data.source,
-      fetched_at: data.fetched_at,
-      freshness_label: data.freshness_label,
-      delayed_message: data.delayed_message || null,
-      live_error: null,
-    });
-    setFlashMessage(`Gold price refreshed in ${data.response_time_ms} ms.`, "success");
-    await loadDashboard(selectedRange);
+    state.flashMessage = `Price refreshed in ${response.response_time_ms} ms.`;
+    state.flashType = "success";
+    await loadDashboard(state.selectedRange);
+    renderApp();
   } catch (error) {
-    if (dashboardState?.live_price) {
-      renderLivePrice({
-        ...dashboardState.live_price,
+    state.flashMessage = error.message || "Live data unavailable";
+    state.flashType = "error";
+    if (state.dashboard?.live_price) {
+      state.dashboard.live_price = {
+        ...state.dashboard.live_price,
         is_live_available: false,
         live_error: error.message || "Live data unavailable",
-      });
+      };
     }
-    setFlashMessage(error.message || "Error refreshing price", "error");
+    renderApp();
   } finally {
-    button.disabled = false;
-    button.innerText = originalText;
+    const nextButton = document.getElementById("refreshPriceBtn");
+    if (nextButton) {
+      nextButton.disabled = false;
+      nextButton.textContent = originalText;
+    }
   }
 }
 
-document.getElementById("loginForm").addEventListener("submit", async (event) => {
-  event.preventDefault();
-
-  try {
-    await requestJson("/api/auth/login", {
-      method: "POST",
-      body: JSON.stringify({
-        email: document.getElementById("loginEmail").value,
-      }),
-    });
-    document.getElementById("loginEmail").value = "";
-    setFlashMessage("", "", "authMessage");
-    await bootstrapApp();
-  } catch (error) {
-    setFlashMessage(error.message, "error", "authMessage");
-  }
-});
-
-document
-  .getElementById("manualPriceForm")
-  .addEventListener("submit", async (event) => {
-    event.preventDefault();
-
-    try {
-      await requestJson("/api/me/manual-price", {
-        method: "POST",
-        body: JSON.stringify({
-          price_per_gram: Number(
-            document.getElementById("manualPriceInput").value,
-          ),
-        }),
-      });
-      document.getElementById("manualPriceInput").value = "";
-      setFlashMessage("Manual price saved.", "success");
-      await loadDashboard(selectedRange);
-    } catch (error) {
-      setFlashMessage(error.message, "error");
-    }
-  });
-
-document
-  .getElementById("paymentDateForm")
-  .addEventListener("submit", async (event) => {
-    event.preventDefault();
-
-    try {
-      await requestJson("/api/me/payment-date", {
-        method: "POST",
-        body: JSON.stringify({
-          last_payment_date: document.getElementById("paymentDateInput").value,
-        }),
-      });
-      setFlashMessage("Payment date saved.", "success");
-      await loadDashboard(selectedRange);
-    } catch (error) {
-      setFlashMessage(error.message, "error");
-    }
-  });
-
-document.getElementById("cityForm").addEventListener("submit", async (event) => {
-  event.preventDefault();
-
-  try {
-    await requestJson("/api/me/city", {
-      method: "POST",
-      body: JSON.stringify({
-        city: document.getElementById("cityInput").value,
-      }),
-    });
-    setFlashMessage("City saved.", "success");
-    await loadDashboard(selectedRange);
-  } catch (error) {
-    setFlashMessage(error.message, "error");
-  }
-});
-
-document.getElementById("telegramForm").addEventListener("submit", async (event) => {
+async function handleTelegramSubmit(event) {
   event.preventDefault();
 
   try {
@@ -469,64 +847,92 @@ document.getElementById("telegramForm").addEventListener("submit", async (event)
         telegram_chat_id: document.getElementById("telegramChatIdInput").value,
       }),
     });
-    setFlashMessage("Telegram connected successfully.", "success");
-    await loadDashboard(selectedRange);
+    state.flashMessage = "Telegram connected successfully.";
+    state.flashType = "success";
+    await loadDashboard(state.selectedRange);
+    renderApp();
   } catch (error) {
-    setFlashMessage(error.message, "error");
-    document.getElementById("telegramStatus").textContent =
-      "Not connected - Reconnect Telegram";
-    document.getElementById("telegramConnectButton").textContent =
-      "Reconnect Telegram";
+    state.flashMessage = error.message;
+    state.flashType = "error";
+    renderApp();
   }
-});
+}
 
-document.getElementById("refreshPriceBtn").addEventListener("click", refreshPrice);
+async function handlePaymentDateSubmit(event) {
+  event.preventDefault();
 
-document.querySelectorAll(".range-button").forEach((button) => {
-  button.addEventListener("click", async () => {
-    const range = button.dataset.range;
-    setActiveRange(range);
-    await loadTrend(range);
-  });
-});
-
-document.getElementById("onboardingBackBtn").addEventListener("click", () => {
-  const screens = dashboardState?.onboarding?.screens || [];
-  if (!screens.length || onboardingIndex === 0) {
-    return;
-  }
-
-  onboardingIndex -= 1;
-  renderOnboarding(dashboardState.onboarding);
-});
-
-document.getElementById("onboardingNextBtn").addEventListener("click", () => {
-  const screens = dashboardState?.onboarding?.screens || [];
-  if (!screens.length || onboardingIndex >= screens.length - 1) {
-    return;
-  }
-
-  onboardingIndex += 1;
-  renderOnboarding(dashboardState.onboarding);
-});
-
-document.getElementById("startBtn").onclick = async () => {
   try {
-    await requestJson("/api/onboarding/complete", {
+    await requestJson("/api/me/payment-date", {
       method: "POST",
+      body: JSON.stringify({
+        last_payment_date: document.getElementById("paymentDateInput").value,
+      }),
     });
-    window.location.reload();
+    state.flashMessage = "Payment date saved.";
+    state.flashType = "success";
+    await loadDashboard(state.selectedRange);
+    renderApp();
   } catch (error) {
-    setFlashMessage(error.message, "error", "authMessage");
+    state.flashMessage = error.message;
+    state.flashType = "error";
+    renderApp();
   }
-};
+}
 
-document.getElementById("logoutButton").addEventListener("click", async () => {
+async function handleCitySubmit(event) {
+  event.preventDefault();
+
+  try {
+    await requestJson("/api/me/city", {
+      method: "POST",
+      body: JSON.stringify({
+        city: document.getElementById("cityInput").value,
+      }),
+    });
+    state.flashMessage = "City saved.";
+    state.flashType = "success";
+    await loadDashboard(state.selectedRange);
+    renderApp();
+  } catch (error) {
+    state.flashMessage = error.message;
+    state.flashType = "error";
+    renderApp();
+  }
+}
+
+async function handleManualPriceSubmit(event) {
+  event.preventDefault();
+
+  try {
+    await requestJson("/api/me/manual-price", {
+      method: "POST",
+      body: JSON.stringify({
+        price_per_gram: Number(document.getElementById("manualPriceInput").value),
+      }),
+    });
+    state.flashMessage = "Manual price saved.";
+    state.flashType = "success";
+    await loadDashboard(state.selectedRange);
+    renderApp();
+  } catch (error) {
+    state.flashMessage = error.message;
+    state.flashType = "error";
+    renderApp();
+  }
+}
+
+async function handleLogout() {
   await requestJson("/api/auth/logout", {
     method: "POST",
   });
-  destroyChart();
-  showAuthView();
-});
+  state.user = null;
+  state.dashboard = null;
+  state.alerts = [];
+  state.nextTrigger = null;
+  state.settingsOpen = false;
+  state.flashMessage = "";
+  state.flashType = "";
+  renderApp();
+}
 
-bootstrapApp();
+initApp();
