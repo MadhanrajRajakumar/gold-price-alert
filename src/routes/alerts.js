@@ -101,6 +101,7 @@ router.post("/refresh-price", async (request, response, next) => {
       source: refreshedPrice.source,
       fetched_at: refreshedPrice.fetched_at,
       freshness_label: refreshedPrice.freshness_label,
+      delayed_message: refreshedPrice.delayed_message || null,
       response_time_ms: refreshedPrice.response_time_ms,
     });
   } catch (error) {

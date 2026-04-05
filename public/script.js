@@ -41,6 +41,12 @@ function setFlashMessage(message, type = "", targetId = "flashMessage") {
   flash.className = `flash-message ${type}`.trim();
 }
 
+function hideAllViews() {
+  document.getElementById("authView").classList.add("hidden");
+  document.getElementById("onboardingView").classList.add("hidden");
+  document.getElementById("appView").classList.add("hidden");
+}
+
 async function requestJson(url, options) {
   const response = await fetch(url, {
     credentials: "same-origin",
@@ -66,20 +72,17 @@ async function requestJson(url, options) {
 }
 
 function showAuthView() {
+  hideAllViews();
   document.getElementById("authView").classList.remove("hidden");
-  document.getElementById("onboardingView").classList.add("hidden");
-  document.getElementById("appView").classList.add("hidden");
 }
 
 function showOnboardingView() {
-  document.getElementById("authView").classList.add("hidden");
+  hideAllViews();
   document.getElementById("onboardingView").classList.remove("hidden");
-  document.getElementById("appView").classList.add("hidden");
 }
 
 function showAppView() {
-  document.getElementById("authView").classList.add("hidden");
-  document.getElementById("onboardingView").classList.add("hidden");
+  hideAllViews();
   document.getElementById("appView").classList.remove("hidden");
 }
 
@@ -214,9 +217,10 @@ function renderLivePrice(live) {
     : "Historical data remains available";
   document.getElementById("priceFreshnessBadge").textContent =
     live.freshness_label || "";
-  document.getElementById("priceWarningBadge").textContent = live.live_error || "";
+  document.getElementById("priceWarningBadge").textContent =
+    live.live_error || live.delayed_message || "";
   document.getElementById("priceWarningBadge").className = `flash-message ${
-    live.live_error ? "error" : ""
+    live.live_error ? "error" : live.delayed_message ? "success" : ""
   }`.trim();
 }
 
@@ -359,6 +363,7 @@ async function refreshPrice() {
       source: data.source,
       fetched_at: data.fetched_at,
       freshness_label: data.freshness_label,
+      delayed_message: data.delayed_message || null,
       live_error: null,
     });
     setFlashMessage(`Gold price refreshed in ${data.response_time_ms} ms.`, "success");
