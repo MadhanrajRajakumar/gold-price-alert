@@ -8,16 +8,27 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
+enum AlertType {
+  LOWEST
+  DEADLINE
+  DAILY
+}
+
 model User {
-  id                Int           @id @default(autoincrement())
-  email             String        @unique
-  telegram_chat_id  String?
-  last_payment_date DateTime?
-  created_at        DateTime      @default(now())
-  goldPrices        GoldPrice[]
-  alertLogs         AlertLog[]
-  activityLogs      ActivityLog[]
-  sessions          Session[]
+  id                     Int           @id @default(autoincrement())
+  email                  String        @unique
+  city                   String        @default("Chennai")
+  telegram_chat_id       String?
+  telegram_verified      Boolean       @default(false)
+  last_payment_date      DateTime?
+  last_alert_sent_at     DateTime?
+  onboarding_completed_at DateTime?
+  alert_preferences      Json          @default("{\"daily\":true,\"lowest\":true,\"deadline\":true}")
+  created_at             DateTime      @default(now())
+  goldPrices             GoldPrice[]
+  alertLogs              AlertLog[]
+  activityLogs           ActivityLog[]
+  sessions               Session[]
 }
 
 model Session {
@@ -33,25 +44,27 @@ model GoldPrice {
   id              Int      @id @default(autoincrement())
   date            DateTime
   price_per_gram  Float
+  min_price       Float?
+  max_price       Float?
+  confidence      Int?
+  city            String   @default("Chennai")
   source          String   @default("system")
+  source_summary  Json?
+  fetched_at      DateTime @default(now())
   manual_override Boolean  @default(false)
   user_id         Int
   user            User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
-  @@unique([user_id, date])
+  @@unique([user_id, date, city])
 }
 
 model AlertLog {
-  id         Int      @id @default(autoincrement())
-  alert_date DateTime
-  condition  String
-  sent_at    DateTime @default(now())
-  status     String
-  details    String?
-  user_id    Int
-  user       User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
-
-  @@unique([user_id, alert_date, condition])
+  id      Int       @id @default(autoincrement())
+  message String
+  sent_at DateTime  @default(now())
+  type    AlertType
+  user_id Int
+  user    User      @relation(fields: [user_id], references: [id], onDelete: Cascade)
 }
 
 model ActivityLog {

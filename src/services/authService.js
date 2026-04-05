@@ -92,9 +92,18 @@ function validateEmail(email) {
 }
 
 function toLocalDateString(date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
+  const normalized = new Date(date);
+  const hasUtcTimeComponent =
+    normalized.getUTCHours() !== 0 ||
+    normalized.getUTCMinutes() !== 0 ||
+    normalized.getUTCSeconds() !== 0 ||
+    normalized.getUTCMilliseconds() !== 0;
+  const safeDate = hasUtcTimeComponent
+    ? new Date(normalized.getTime() + 330 * 60 * 1000)
+    : normalized;
+  const year = safeDate.getUTCFullYear();
+  const month = String(safeDate.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(safeDate.getUTCDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
 }
 
@@ -102,11 +111,19 @@ function serializeUser(user) {
   return {
     id: user.id,
     email: user.email,
+    city: user.city || "Chennai",
     telegram_chat_id: user.telegram_chat_id,
-    telegram_connected: Boolean(user.telegram_chat_id),
+    telegram_verified: Boolean(user.telegram_verified),
     last_payment_date: user.last_payment_date
       ? toLocalDateString(user.last_payment_date)
       : null,
+    last_alert_sent_at: user.last_alert_sent_at
+      ? user.last_alert_sent_at.toISOString()
+      : null,
+    onboarding_completed_at: user.onboarding_completed_at
+      ? user.onboarding_completed_at.toISOString()
+      : null,
+    onboardingCompleted: Boolean(user.onboarding_completed_at),
   };
 }
 
@@ -122,7 +139,15 @@ async function loginOrCreateUser(email, response) {
   const user = await prisma.user.upsert({
     where: { email: normalizedEmail },
     update: {},
-    create: { email: normalizedEmail },
+    create: {
+      email: normalizedEmail,
+      city: "Chennai",
+      alert_preferences: {
+        daily: true,
+        lowest: true,
+        deadline: true,
+      },
+    },
   });
 
   await createUserSession(user, response);

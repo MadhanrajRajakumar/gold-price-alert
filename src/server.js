@@ -5,10 +5,11 @@ const express = require("express");
 const path = require("path");
 const prisma = require("./lib/prisma");
 const authRoutes = require("./routes/auth");
+const alertRoutes = require("./routes/alerts");
 const userRoutes = require("./routes/prices");
 const { validateEnv } = require("./config/env");
 const { requireAuth } = require("./services/authService");
-const { runDailyPriceJob, startScheduler } = require("./services/scheduler");
+const { startScheduler } = require("./services/scheduler");
 
 const app = express();
 const env = validateEnv();
@@ -19,6 +20,7 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, "..", "public")));
 
 app.use("/api/auth", authRoutes);
+app.use("/api", requireAuth, alertRoutes);
 app.use("/api/me", requireAuth, userRoutes);
 
 app.get("/health", (_req, res) => {
@@ -44,7 +46,6 @@ async function connectDatabase() {
 
 async function bootstrap() {
   await connectDatabase();
-  await runDailyPriceJob();
   startScheduler();
 
   const server = app.listen(port, () => {
