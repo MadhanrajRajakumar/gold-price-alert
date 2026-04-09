@@ -237,7 +237,7 @@ function buildSourceSummary(source, extra = {}) {
 }
 
 async function fetchMetalsAPI() {
-  const apiKey = process.env.METALPRICEAPI_KEY || process.env.METALS_API_KEY;
+  const apiKey = process.env.METALPRICE_API_KEY || process.env.METALPRICEAPI_KEY || process.env.METALS_API_KEY;
 
   if (!apiKey) {
     throw new Error("MetalpriceAPI not configured");
@@ -258,20 +258,35 @@ async function fetchMetalsAPI() {
     url.searchParams.set("currencies", "XAU,INR");
   }
 
+  console.log("[gold-price-alert] MetalpriceAPI Request:", {
+    url: url.toString(),
+    hasApiKey: !!apiKey,
+  });
+
   const payload = await fetchJson(url.toString(), {
     headers: {
       accept: "application/json",
     },
   });
 
+  console.log("[gold-price-alert] MetalpriceAPI Raw Response:", JSON.stringify(payload, null, 2));
+
   if (payload.success === false) {
+    console.error("[gold-price-alert] MetalpriceAPI Error Response:", payload);
     throw new Error(payload.error?.info || "MetalpriceAPI failure");
   }
 
   const xauRate = getJsonValue(payload, [["rates", "USDXAU"], ["rates", "XAU"]]);
   const inrRate = getJsonValue(payload, [["rates", "INR"]]);
 
+  console.log("[gold-price-alert] Extracted rates:", {
+    xauRate,
+    inrRate,
+    allRates: payload.rates,
+  });
+
   if (!xauRate || !inrRate) {
+    console.error("[gold-price-alert] Missing rates:", { xauRate, inrRate, payload });
     throw new Error("MetalpriceAPI response missing USDXAU/INR rates");
   }
 
