@@ -161,9 +161,16 @@ function getDecisionPresentation(dashboard) {
 }
 
 function getDecisionSupport(dashboard) {
+  const live = dashboard?.live_price;
+  const hasLivePrice = Boolean(live?.price_per_gram);
   const { delta, label } = getPriceChangeMetrics(dashboard);
+
+  if (!hasLivePrice) {
+    return live?.live_error || "Live data unavailable";
+  }
+
   if (delta === null) {
-    return dashboard?.live_price?.live_error || "Live data unavailable";
+    return "Price trend unavailable";
   }
 
   return `${label} by ${formatSignedCurrency(delta)}.`;
@@ -395,7 +402,7 @@ function renderDashboard() {
   const priceMetrics = getPriceChangeMetrics(dashboard);
   const decision = getDecisionPresentation(dashboard);
   const daysLeft = getDaysLeftCard(dashboard.paymentWindow, dashboard.paymentWarning);
-  const liveAvailable = Boolean(live.is_live_available);
+  const liveAvailable = live?.is_live_available === true;
 
   app.innerHTML = `
     <main class="screen">
@@ -420,7 +427,9 @@ function renderDashboard() {
           <div class="brand">
             <div class="headline-price">
               <strong>${escapeHtml(
-                liveAvailable ? formatCurrency(live.price_per_gram) : "LIVE DATA UNAVAILABLE",
+                liveAvailable
+                  ? formatCurrency(live.price_per_gram)
+                  : live?.live_error || "Live data unavailable",
               )}</strong>
               <span class="change-pill ${priceMetrics.className}">${
                 priceMetrics.delta === null
@@ -818,13 +827,14 @@ async function refreshPrice() {
     await loadDashboard(state.selectedRange);
     renderApp();
   } catch (error) {
+    console.error("REFRESH ERROR:", error);
     state.flashMessage = error.message || "Live data unavailable";
     state.flashType = "error";
     if (state.dashboard?.live_price) {
       state.dashboard.live_price = {
         ...state.dashboard.live_price,
         is_live_available: false,
-        live_error: error.message || "Live data unavailable",
+        live_error: error.message,
       };
     }
     renderApp();

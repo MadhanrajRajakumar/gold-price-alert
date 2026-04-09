@@ -237,84 +237,68 @@ function buildSourceSummary(source, extra = {}) {
 }
 
 async function fetchMetalsAPI() {
-  const apiKey = process.env.METALPRICE_API_KEY || process.env.METALPRICEAPI_KEY || process.env.METALS_API_KEY;
+  const apiKey =
+    process.env.METAL_API_KEY ||
+    process.env.METALPRICE_API_KEY ||
+    process.env.METALPRICEAPI_KEY ||
+    process.env.METALS_API_KEY;
 
   if (!apiKey) {
-    throw new Error("MetalpriceAPI not configured");
+    throw new Error("Metal API not configured");
   }
 
-  const endpoint =
-    process.env.METALPRICEAPI_URL ||
-    process.env.METALS_API_URL ||
-    "https://api.metalpriceapi.com/v1/latest";
-  const url = new URL(endpoint);
-  if (!url.searchParams.has("api_key")) {
-    url.searchParams.set("api_key", apiKey);
+  const url = `https://api.metalpriceapi.com/v1/latest?api_key=${apiKey}&base=USD&currencies=XAU`;
+
+  try {
+    const payload = await fetchJson(url, {
+      headers: {
+        accept: "application/json",
+      },
+    });
+
+    console.log("RAW API RESPONSE:", JSON.stringify(payload, null, 2));
+
+    if (!payload.success) {
+      throw new Error(`API failed: ${JSON.stringify(payload)}`);
+    }
+
+    const rate = payload?.rates?.XAU;
+
+    if (!rate) {
+      throw new Error("Invalid API structure: missing XAU");
+    }
+
+    const pricePerOunceUSD = 1 / Number(rate);
+    const usdToInr = 83;
+    const price24K = (pricePerOunceUSD * usdToInr) / TROY_OUNCE_TO_GRAMS;
+    const price22K = price24K * 0.916;
+    const normalizedPrice = normalizeFetchedPricePerGram(Math.round(price22K));
+
+    console.log({
+      rawUSD: pricePerOunceUSD,
+      convertedINR: price24K,
+      final22k: normalizedPrice,
+      source: "metal_api",
+    });
+    logLiveAttempt({ source: "metal_api", price: normalizedPrice, error: null });
+
+    return {
+      is_live_available: true,
+      source: "metal_api",
+      price_per_gram: normalizedPrice,
+      fetched_at: new Date().toISOString(),
+      delayed_message: "Data may be delayed (free plan)",
+      source_summary: buildSourceSummary("metal_api", {
+        raw_usd_ounce_24k: Number(pricePerOunceUSD.toFixed(2)),
+        converted_inr_gram_24k: Number(price24K.toFixed(2)),
+        final_22k: normalizedPrice,
+        usd_inr: usdToInr,
+      }),
+    };
+  } catch (err) {
+    console.error("LIVE PRICE ERROR:", err.message);
+    throw new Error(err.message);
   }
-  if (!url.searchParams.has("base")) {
-    url.searchParams.set("base", "USD");
-  }
-  if (!url.searchParams.has("currencies")) {
-    url.searchParams.set("currencies", "XAU,INR");
-  }
-
-  console.log("[gold-price-alert] MetalpriceAPI Request:", {
-    url: url.toString(),
-    hasApiKey: !!apiKey,
-  });
-
-  const payload = await fetchJson(url.toString(), {
-    headers: {
-      accept: "application/json",
-    },
-  });
-
-  console.log("[gold-price-alert] MetalpriceAPI Raw Response:", JSON.stringify(payload, null, 2));
-
-  if (payload.success === false) {
-    console.error("[gold-price-alert] MetalpriceAPI Error Response:", payload);
-    throw new Error(payload.error?.info || "MetalpriceAPI failure");
-  }
-
-  const xauRate = getJsonValue(payload, [["rates", "USDXAU"], ["rates", "XAU"]]);
-  const inrRate = getJsonValue(payload, [["rates", "INR"]]);
-
-  console.log("[gold-price-alert] Extracted rates:", {
-    xauRate,
-    inrRate,
-    allRates: payload.rates,
-  });
-
-  if (!xauRate || !inrRate) {
-    console.error("[gold-price-alert] Missing rates:", { xauRate, inrRate, payload });
-    throw new Error("MetalpriceAPI response missing USDXAU/INR rates");
-  }
-
-  const rawUSD = 1 / Number(xauRate);
-  const inrPerOunce = rawUSD * Number(inrRate);
-  const convertedINR = inrPerOunce / TROY_OUNCE_TO_GRAMS;
-  const final22k = convert24kTo22k(convertedINR);
-  const price = normalizeFetchedPricePerGram(final22k);
-  console.log({
-    rawUSD,
-    convertedINR,
-    final22k,
-    source: "metals_api",
-  });
-  logLiveAttempt({ source: "metals_api", price, error: null });
-
-  return {
-    source: "metalpriceapi",
-    price_per_gram: price,
-    fetched_at: new Date().toISOString(),
-    delayed_message: "Data may be delayed (free plan)",
-    source_summary: buildSourceSummary("metalpriceapi", {
-      raw_usd_ounce_24k: Number(rawUSD.toFixed(2)),
-      converted_inr_gram_24k: Number(convertedINR.toFixed(2)),
-      final_22k: price,
-      usd_inr: Number(inrRate),
-    }),
-  };
 }
 
 async function fetchGoldAPI() {
@@ -405,7 +389,7 @@ async function fetchGoldAPI() {
 
 async function fetchGoldPrice() {
   const attempts = [
-    ["metalpriceapi", fetchMetalsAPI],
+    ["metal_api", fetchMetalsAPI],
     ["goldapi", fetchGoldAPI],
   ];
   const errors = [];
@@ -422,9 +406,11 @@ async function fetchGoldPrice() {
     }
   }
 
+  const primaryError = errors[0]?.reason || "Live data unavailable";
   return {
     status: "unavailable",
-    message: "Live data unavailable",
+    message: primaryError,
+    live_error: primaryError,
     errors,
   };
 }
@@ -621,7 +607,7 @@ async function fetchLatestGoldPrice(
       status: "unavailable",
       is_live_available: false,
       city: normalizedCity,
-      live_error: liveResult.message,
+      live_error: liveResult.live_error || liveResult.message,
       fetched_at: new Date().toISOString(),
       last_known_historical:
         latestReasonableStored &&

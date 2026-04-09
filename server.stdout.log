@@ -1,0 +1,100 @@
+[dotenv@17.3.1] injecting env (13) from .env -- tip: ⚙️  suppress all logs with { quiet: true }
+[gold-price-alert] Database connection established
+[gold-price-alert] Scheduler started with "0 9 * * *" in Asia/Calcutta; next run 2026-04-09T22:00:00.000Z
+[gold-price-alert] Server running on port 3000
+RAW API RESPONSE: {
+  "success": true,
+  "base": "USD",
+  "timestamp": 1775692799,
+  "rates": {
+    "USDXAU": 4840.0976925318,
+    "XAU": 0.0002066074
+  }
+}
+{
+  rawUSD: 4840.0976925318255,
+  convertedINR: 12915.84897134218,
+  final22k: 11831,
+  source: 'metal_api'
+}
+{ source: 'metal_api', price: 11831, error: null }
+{ source: 'metal_api', price: 11831, error: null }
+[gold-price-alert] Manual refresh response {
+  userId: 2,
+  city: 'Chennai',
+  response_time_ms: 2444,
+  is_live_available: true,
+  source: 'metal_api',
+  price_per_gram: 11831,
+  error: null
+}
+RAW API RESPONSE: {
+  "success": true,
+  "base": "USD",
+  "timestamp": 1775692799,
+  "rates": {
+    "USDXAU": 4840.0976925318,
+    "XAU": 0.0002066074
+  }
+}
+{
+  rawUSD: 4840.0976925318255,
+  convertedINR: 12915.84897134218,
+  final22k: 11831,
+  source: 'metal_api'
+}
+{ source: 'metal_api', price: 11831, error: null }
+{ source: 'metal_api', price: 11831, error: null }
+[gold-price-alert] Payment window calculation {
+  lastPaymentDate: '2026-03-30T00:00:00.000Z',
+  nextDueDate: '2026-04-30T00:00:00.000Z',
+  daysLeft: 21
+}
+RAW API RESPONSE: {
+  "success": true,
+  "base": "USD",
+  "timestamp": 1775692799,
+  "rates": {
+    "USDXAU": 4840.0976925318,
+    "XAU": 0.0002066074
+  }
+}
+{
+  rawUSD: 4840.0976925318255,
+  convertedINR: 12915.84897134218,
+  final22k: 11831,
+  source: 'metal_api'
+}
+{ source: 'metal_api', price: 11831, error: null }
+{ source: 'metal_api', price: 11831, error: null }
+[gold-price-alert] Manual refresh response {
+  userId: 2,
+  city: 'Chennai',
+  response_time_ms: 3789,
+  is_live_available: true,
+  source: 'metal_api',
+  price_per_gram: 11831,
+  error: null
+}
+RAW API RESPONSE: {
+  "success": true,
+  "base": "USD",
+  "timestamp": 1775692799,
+  "rates": {
+    "USDXAU": 4840.0976925318,
+    "XAU": 0.0002066074
+  }
+}
+{
+  rawUSD: 4840.0976925318255,
+  convertedINR: 12915.84897134218,
+  final22k: 11831,
+  source: 'metal_api'
+}
+{ source: 'metal_api', price: 11831, error: null }
+{ source: 'metal_api', price: 11831, error: null }
+[gold-price-alert] Payment window calculation {
+  lastPaymentDate: '2026-03-30T00:00:00.000Z',
+  nextDueDate: '2026-04-30T00:00:00.000Z',
+  daysLeft: 21
+}
