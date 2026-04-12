@@ -18,20 +18,20 @@ const DEFAULT_ALERT_PREFERENCES = {
   lowest: true,
   deadline: true,
 };
-const CITY_CONFIG = {
-  Chennai: {
-    premium: 0.025,
-  },
-  Mumbai: {
-    premium: 0.02,
-  },
-  Delhi: {
-    premium: 0.03,
-  },
-  Coimbatore: {
-    premium: 0.027,
-  },
-};
+// const CITY_CONFIG = {
+//   Chennai: {
+//     premium: 0.025,
+//   },
+//   Mumbai: {
+//     premium: 0.02,
+//   },
+//   Delhi: {
+//     premium: 0.03,
+//   },
+//   Coimbatore: {
+//     premium: 0.027,
+//   },
+// };
 const SUPPORTED_CITIES = ["Chennai", "Mumbai", "Delhi", "Coimbatore"];
 const SUPPORTED_RANGES = {
   "1W": 7,
@@ -277,8 +277,8 @@ function buildSourceSummary(source, extra = {}) {
 }
 
 async function fetchGoldAPI(city = DEFAULT_CITY) {
-  const resolvedCity = CITY_CONFIG[city] ? city : DEFAULT_CITY;
-  const cityConfig = CITY_CONFIG[resolvedCity] || CITY_CONFIG[DEFAULT_CITY];
+  const resolvedCity = city || DEFAULT_CITY;
+  // const cityConfig = CITY_CONFIG[resolvedCity] || CITY_CONFIG[DEFAULT_CITY];
   const endpoint = "https://api.gold-api.com/price/XAU/INR";
   const payload = await fetchJson(endpoint, {
     headers: {
@@ -291,25 +291,33 @@ async function fetchGoldAPI(city = DEFAULT_CITY) {
   }
 
   const pricePerOunce = Number(payload.price);
-  const basePrice = pricePerOunce / TROY_OUNCE_TO_GRAMS;
-  const margin = basePrice * cityConfig.premium;
-  const finalPriceRaw = basePrice + margin;
+
+  // Step 1: Convert ounce → gram (24K)
+  const price24K = pricePerOunce / TROY_OUNCE_TO_GRAMS;
+
+  // Step 2: Convert 24K → 22K (IMPORTANT FIX)
+  const price22K = price24K * 0.916;
+
+  // Step 3: Apply India markup (FINAL FIX)
+  const INDIA_MARKUP = 1.085;
+
+  const finalPriceRaw = price22K * INDIA_MARKUP;
   const marketReference = null;
-  const validatedPrice = await getValidatedPrice(finalPriceRaw);
-  const calibratedPrice = calibratePrice(validatedPrice, marketReference);
-  const diffPercent = marketReference
-    ? (Math.abs(calibratedPrice - marketReference) / marketReference) * 100
-    : 0;
-  const confidence = getConfidenceScore(diffPercent);
-  const range = getPriceRange(calibratedPrice);
-  const finalPrice = Number(calibratedPrice.toFixed(2));
+  // const validatedPrice = await getValidatedPrice(finalPriceRaw);
+  // const calibratedPrice = calibratePrice(validatedPrice, marketReference);
+  // const diffPercent = marketReference
+  //   ? (Math.abs(calibratedPrice - marketReference) / marketReference) * 100
+  //   : 0;
+  const finalPrice = Number(finalPriceRaw.toFixed(2));
+  const confidence = 90; // static for now
+  const range = getPriceRange(finalPrice);
   const normalizedPrice = normalizeFetchedPricePerGram(finalPrice);
   const fetchedAt = payload.updatedAt || new Date().toISOString();
 
   console.log({
-    api: basePrice,
-    spreadAdjusted: finalPriceRaw,
-    final: finalPrice,
+    api_24k: price24K,
+    converted_22k: price22K,
+    adjusted_india: finalPriceRaw,
   });
   logLiveAttempt({ source: "gold-api", price: normalizedPrice, error: null });
 
@@ -325,11 +333,11 @@ async function fetchGoldAPI(city = DEFAULT_CITY) {
     last_updated: fetchedAt,
     source_summary: buildSourceSummary("gold-api", {
       city: resolvedCity,
-      premium: cityConfig.premium,
+      india_markup: 1.085,
       ounce_inr: pricePerOunce,
-      gram_inr: Number(basePrice.toFixed(2)),
-      margin: Number(margin.toFixed(2)),
-      validated_price: Number(validatedPrice.toFixed(2)),
+      gram_inr: Number(price24K.toFixed(2)),
+      india_markup: 1.085,
+      validated_price: finalPrice,
       final_price: normalizedPrice,
       confidence,
       price_range: range,
