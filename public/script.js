@@ -155,9 +155,8 @@ function getPriceChangeMetrics(dashboard) {
 }
 
 function getDecisionPresentation(dashboard) {
-  const label = dashboard?.decision?.label || "WAIT";
-  const score = Number(dashboard?.decision?.score ?? 5);
-  const confidence = Math.max(0, Math.min(100, Math.round(score * 10)));
+  const label = dashboard?.decision?.decision || dashboard?.decision?.label || "WAIT";
+  const confidence = dashboard?.decision?.confidence ?? 50;
   const lower = label.toLowerCase();
 
   let headline = "WAIT";
