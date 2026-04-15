@@ -16,10 +16,27 @@ const state = {
 };
 
 const onboardingScreens = [
-  "You are overpaying gold every month",
-  "Gold price changes daily - you miss the lowest",
-  "We track and tell you when to pay",
-  "Start tracking gold price",
+  {
+    screen: "PAIN",
+    headline: "You’re probably overpaying for gold.",
+    subtext: "Most people buy at the wrong time — and never realize it.",
+    visualType: "chart-pain",
+    cta: "Show me how"
+  },
+  {
+    screen: "CONTROL",
+    headline: "Know exactly when to buy.",
+    subtext: "We track real prices, trends, and tell you when it’s the right time.",
+    visualType: "chart-control",
+    cta: "How does it work?"
+  },
+  {
+    screen: "OUTCOME",
+    headline: "Buy smarter. Save more.",
+    subtext: "Get daily signals, confidence scores, and alerts before you pay.",
+    visualType: "dashboard-preview",
+    cta: "Get started"
+  }
 ];
 
 function escapeHtml(value) {
@@ -222,57 +239,41 @@ function renderLogin() {
 }
 
 function renderOnboarding() {
-  const step = state.onboardingIndex + 1;
-  const progress = (step / onboardingScreens.length) * 100;
+  const stepConfig = onboardingScreens[state.onboardingIndex];
   const isLast = state.onboardingIndex === onboardingScreens.length - 1;
 
   app.innerHTML = `
     <main class="screen onboarding-screen">
-      <section class="card onboarding-card">
-        <p class="eyebrow">Gold Price Alert</p>
-        <div class="progress"><span style="width:${progress}%"></span></div>
-        <div class="onboarding-copy">
-          <p class="meta">Step ${step} of ${onboardingScreens.length}</p>
-          <h1>${escapeHtml(onboardingScreens[state.onboardingIndex])}</h1>
-          <p class="subtitle">We turn price noise into one clear call: buy now or wait.</p>
+      <section class="card onboarding-card visual-card">
+        <div class="onboarding-visual ${escapeHtml(stepConfig.visualType)}">
+          <div class="visual-element"></div>
         </div>
-        <div class="row-between">
-          <button id="onboardingBack" type="button" class="ghost-button" ${
-            state.onboardingIndex === 0 ? "disabled" : ""
-          }>Back</button>
-          ${
-            isLast
-              ? '<button id="startBtn" type="button" class="primary-button">Start tracking gold price</button>'
-              : '<button id="onboardingNext" type="button" class="primary-button">Next</button>'
-          }
+        <div class="onboarding-content">
+          <h1>${escapeHtml(stepConfig.headline)}</h1>
+          <p class="subtitle">${escapeHtml(stepConfig.subtext)}</p>
+        </div>
+        <div class="onboarding-footer">
+          <div class="progress-dots">
+            ${onboardingScreens.map((_, i) => `<span class="${i === state.onboardingIndex ? 'active' : ''}"></span>`).join('')}
+          </div>
+          <button id="onboardingNext" type="button" class="primary-button full-width">${escapeHtml(stepConfig.cta)}</button>
         </div>
       </section>
     </main>
   `;
 
-  const back = document.getElementById("onboardingBack");
-  if (back) {
-    back.addEventListener("click", () => {
-      if (state.onboardingIndex > 0) {
-        state.onboardingIndex -= 1;
+  const nextBtn = document.getElementById("onboardingNext");
+  if (nextBtn) {
+    nextBtn.addEventListener("click", () => {
+      if (isLast) {
+        localStorage.setItem("onboardingComplete", "true");
+        state.onboardingIndex = 0;
         renderApp();
-      }
-    });
-  }
-
-  const next = document.getElementById("onboardingNext");
-  if (next) {
-    next.addEventListener("click", () => {
-      if (state.onboardingIndex < onboardingScreens.length - 1) {
+      } else {
         state.onboardingIndex += 1;
-        renderApp();
+        renderOnboarding();
       }
     });
-  }
-
-  const start = document.getElementById("startBtn");
-  if (start) {
-    start.addEventListener("click", completeOnboarding);
   }
 }
 
@@ -700,13 +701,13 @@ function attachDashboardEvents() {
 function renderApp() {
   destroyChart();
 
-  if (!state.user || !state.user.email) {
-    renderLogin();
+  if (!localStorage.getItem("onboardingComplete")) {
+    renderOnboarding();
     return;
   }
 
-  if (!state.user.onboardingCompleted) {
-    renderOnboarding();
+  if (!state.user || !state.user.email) {
+    renderLogin();
     return;
   }
 
@@ -744,14 +745,14 @@ async function initApp() {
   state.flashMessage = "";
   state.flashType = "";
 
+  if (!localStorage.getItem("onboardingComplete")) {
+    renderApp();
+    return;
+  }
+
   try {
     const auth = await requestJson("/api/auth/me");
     state.user = auth.user;
-
-    if (!state.user.onboardingCompleted) {
-      renderApp();
-      return;
-    }
 
     await loadDashboard(state.selectedRange);
     renderApp();
@@ -790,18 +791,6 @@ async function handleLoginSubmit(event) {
   }
 }
 
-async function completeOnboarding() {
-  try {
-    await requestJson("/api/onboarding/complete", {
-      method: "POST",
-    });
-    location.reload();
-  } catch (error) {
-    state.authMessage = error.message;
-    state.authType = "error";
-    renderApp();
-  }
-}
 
 async function refreshPrice() {
   const button = document.getElementById("refreshPriceBtn");

@@ -18,20 +18,7 @@ const DEFAULT_ALERT_PREFERENCES = {
   lowest: true,
   deadline: true,
 };
-// const CITY_CONFIG = {
-//   Chennai: {
-//     premium: 0.025,
-//   },
-//   Mumbai: {
-//     premium: 0.02,
-//   },
-//   Delhi: {
-//     premium: 0.03,
-//   },
-//   Coimbatore: {
-//     premium: 0.027,
-//   },
-// };
+
 const SUPPORTED_CITIES = ["Chennai", "Mumbai", "Delhi", "Coimbatore"];
 const SUPPORTED_RANGES = {
   "1W": 7,
@@ -212,54 +199,7 @@ function logLiveAttempt({ source, price = null, error = null }) {
   });
 }
 
-async function getScrapedChennaiPrice() {
-  throw new Error("Chennai scraping not implemented");
-}
 
-async function getValidatedPrice(apiPrice) {
-  try {
-    const scrapedPrice = await getScrapedChennaiPrice();
-    const diff = Math.abs(apiPrice - scrapedPrice) / scrapedPrice;
-
-    if (diff < 0.02) {
-      return apiPrice;
-    }
-
-    return (apiPrice + scrapedPrice) / 2;
-  } catch {
-    return apiPrice;
-  }
-}
-
-function calibratePrice(calculated, marketReference) {
-  if (!marketReference) {
-    return calculated;
-  }
-
-  const ratio = marketReference / calculated;
-
-  if (ratio > 0.95 && ratio < 1.05) {
-    return calculated * ratio;
-  }
-
-  return calculated;
-}
-
-function getConfidenceScore(diffPercent) {
-  if (diffPercent < 0.5) {
-    return 95;
-  }
-  if (diffPercent < 1) {
-    return 90;
-  }
-  if (diffPercent < 2) {
-    return 80;
-  }
-  if (diffPercent < 5) {
-    return 60;
-  }
-  return 40;
-}
 
 function getPriceRange(price) {
   return {
@@ -278,7 +218,6 @@ function buildSourceSummary(source, extra = {}) {
 
 async function fetchGoldAPI(city = DEFAULT_CITY) {
   const resolvedCity = city || DEFAULT_CITY;
-  // const cityConfig = CITY_CONFIG[resolvedCity] || CITY_CONFIG[DEFAULT_CITY];
   const endpoint = "https://api.gold-api.com/price/XAU/INR";
   const payload = await fetchJson(endpoint, {
     headers: {
@@ -302,12 +241,7 @@ async function fetchGoldAPI(city = DEFAULT_CITY) {
   const INDIA_MARKUP = 1.085;
 
   const finalPriceRaw = price22K * INDIA_MARKUP;
-  const marketReference = null;
-  // const validatedPrice = await getValidatedPrice(finalPriceRaw);
-  // const calibratedPrice = calibratePrice(validatedPrice, marketReference);
-  // const diffPercent = marketReference
-  //   ? (Math.abs(calibratedPrice - marketReference) / marketReference) * 100
-  //   : 0;
+
   const finalPrice = Number(finalPriceRaw.toFixed(2));
   const confidence = 90; // static for now
   const range = getPriceRange(finalPrice);
@@ -336,8 +270,6 @@ async function fetchGoldAPI(city = DEFAULT_CITY) {
       india_markup: 1.085,
       ounce_inr: pricePerOunce,
       gram_inr: Number(price24K.toFixed(2)),
-      india_markup: 1.085,
-      validated_price: finalPrice,
       final_price: normalizedPrice,
       confidence,
       price_range: range,
@@ -544,7 +476,7 @@ async function fetchLatestGoldPrice(
       fetched_at: new Date().toISOString(),
       last_known_historical:
         latestReasonableStored &&
-        normalizeCalendarDate(latestReasonableStored.date).getTime() <= today.getTime()
+          normalizeCalendarDate(latestReasonableStored.date).getTime() <= today.getTime()
           ? serializeStoredPrice(latestReasonableStored, referenceDate)
           : null,
       errors: liveResult.errors,
@@ -792,37 +724,108 @@ async function getLowestPriceInLast30Days(
   );
 }
 
-function buildDecision(livePrice, historicalLow, paymentWindow) {
-  if (!livePrice?.is_live_available) {
+async function getHistoricalPrices(userId, city, days = 30) {
+  const prices = await prisma.goldPrice.findMany({
+    where: {
+      user_id: userId,
+      city: normalizeCity(city)
+    },
+    orderBy: { date: 'desc' },
+    take: days
+  });
+
+  return prices.map(p => p.price_per_gram);
+}
+
+function average(arr) {
+  return arr.length === 0 ? 0 : arr.reduce((a, b) => a + b, 0) / arr.length;
+}
+
+function stdDeviation(arr) {
+  const avg = average(arr);
+  const variance = arr.reduce((sum, val) => sum + Math.pow(val - avg, 2), 0) / arr.length;
+  return Math.sqrt(variance);
+}
+
+async function buildDecision({ userId, currentPrice, daysLeft }) {
+  const history30 = await getHistoricalPrices(userId, DEFAULT_CITY, 30);
+
+  if (!history30.length) {
     return {
-      score: null,
-      label: "LIVE DATA UNAVAILABLE",
-      message: "Unable to fetch live data",
+      decision: "WAIT",
+      confidence: 50,
+      reason: "Not enough data"
     };
   }
 
-  let score = 5;
+  const avg30 = average(history30);
+  const avg7 = average(history30.slice(0, 7));
 
-  if (historicalLow !== null && livePrice.price_per_gram <= historicalLow + 50) {
-    score += 3;
-  }
+  const deviation = (currentPrice - avg30) / avg30;
 
-  if (paymentWindow && paymentWindow.daysLeft <= 3) {
-    score += 2;
-  }
+  let score = 0;
 
-  if (score >= 8) {
-    return {
-      score,
-      label: "PAY TODAY",
-      message: "Good time to pay",
-    };
-  }
+  // PRICE POSITION
+  if (deviation <= -0.02) score += 3;
+  else if (deviation <= 0.01) score += 1;
+  else score -= 2;
+
+  // TREND
+  if (avg7 > avg30) score += 2;
+  else score -= 1;
+
+  // DEADLINE PRESSURE
+  if (daysLeft < 5) score += 3;
+  else if (daysLeft < 10) score += 1;
+
+  let decision = "WAIT";
+
+  if (score >= 5) decision = "BUY";
+  else if (score < 2) decision = "WAIT";
+
+  // CONFIDENCE (BASED ON VOLATILITY)
+  const volatility = stdDeviation(history30);
+
+  // 1. Volatility confidence (market stability)
+  let volatilityScore = 0;
+  if (volatility < 100) volatilityScore = 40;
+  else if (volatility < 300) volatilityScore = 30;
+  else volatilityScore = 20;
+
+  // 2. Deviation confidence (how strong signal is)
+  const deviationPercent = Math.abs(deviation);
+
+  let deviationScore = 0;
+  if (deviationPercent > 0.03) deviationScore = 30;
+  else if (deviationPercent > 0.015) deviationScore = 20;
+  else deviationScore = 10;
+
+  // 3. Trend confidence
+  let trendScore = 0;
+  if (avg7 > avg30) trendScore = 30;
+  else trendScore = 15;
+
+  // FINAL CONFIDENCE
+  const confidence = Math.min(
+    95,
+    Math.round(volatilityScore + deviationScore + trendScore)
+  );
+
+  console.log({
+    volatility,
+    deviationPercent,
+    volatilityScore,
+    deviationScore,
+    trendScore,
+    finalConfidence: confidence
+  });
 
   return {
-    score,
-    label: "WAIT",
-    message: "Wait",
+    decision,
+    confidence,
+    avg30: Number(avg30.toFixed(2)),
+    deviation: Number((deviation * 100).toFixed(2)),
+    trend: avg7 > avg30 ? "UP" : "DOWN"
   };
 }
 
@@ -963,8 +966,44 @@ async function getDashboardSummary(
     }
   }
 
-  const historicalLow = chart.lowest?.price_per_gram ?? null;
-  const decision = buildDecision(livePrice, historicalLow, paymentWindow);
+  const daysLeft = paymentWindow ? paymentWindow.daysLeft : 30;
+
+  let decisionData;
+  if (!livePrice?.is_live_available) {
+    decisionData = {
+      decision: "WAIT",
+      confidence: 50,
+      avg30: 0,
+      deviation: 0,
+      trend: "NONE"
+    };
+  } else {
+    decisionData = await buildDecision({
+      userId,
+      currentPrice: livePrice.price_per_gram,
+      daysLeft
+    });
+  }
+
+  const decision = {
+    decision: decisionData.decision,
+    confidence: decisionData.confidence,
+    decision_meta: {
+      avg30: decisionData.avg30,
+      deviation_percent: decisionData.deviation,
+      trend: decisionData.trend
+    }
+  };
+
+  console.log({
+    currentPrice: livePrice?.price_per_gram,
+    avg30: decisionData.avg30,
+    deviation: decisionData.deviation,
+    trend: decisionData.trend,
+    daysLeft,
+    decision: decisionData.decision
+  });
+
   const nextTriggerAt = getNextTriggerTime(referenceDate);
 
   return {
