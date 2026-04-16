@@ -307,21 +307,12 @@ function getSettingsHtml(dashboard) {
               nextAlertLabel || "Daily alerts at 9:00 AM",
             )}</span>
           </div>
-          <form id="telegramForm" class="form-stack">
-            <div class="field">
-              <label for="telegramChatIdInput">Telegram chat ID</label>
-              <input
-                id="telegramChatIdInput"
-                type="text"
-                value="${escapeHtml(user.telegram_chat_id || "")}"
-                placeholder="123456789"
-                required
-              />
-            </div>
-            <button type="submit" class="primary-button">${
-              user.telegram_verified ? "Reconnect Telegram" : "Connect Telegram"
-            }</button>
-          </form>
+          ${
+            !user.telegram_verified
+              ? `<a href="https://t.me/GoldPzbot?start=${user.id}" target="_blank" class="primary-button" style="display:block;text-align:center;text-decoration:none;margin-top:1rem;">Connect Telegram</a>`
+              : `<p class="meta" style="margin-top:0.5rem">You are receiving alerts mapped to chat ID <strong>${escapeHtml(user.telegram_chat_id || "")}</strong>. You can chat with the bot anytime.</p>
+                 <a href="https://t.me/GoldPzbot" target="_blank" class="ghost-button" style="display:block;text-align:center;text-decoration:none;margin-top:0.5rem;">Open Bot</a>`
+          }
         </section>
 
         <section class="drawer-section">
@@ -715,7 +706,6 @@ function attachDashboardEvents() {
     });
   }
 
-  document.getElementById("telegramForm")?.addEventListener("submit", handleTelegramSubmit);
   document.getElementById("alertSettingsForm")?.addEventListener("submit", handleAlertSettingsSubmit);
   document.getElementById("paymentDateForm")?.addEventListener("submit", handlePaymentDateSubmit);
   document.getElementById("cityForm")?.addEventListener("submit", handleCitySubmit);
@@ -861,26 +851,6 @@ async function refreshPrice() {
   }
 }
 
-async function handleTelegramSubmit(event) {
-  event.preventDefault();
-
-  try {
-    await requestJson("/api/telegram/connect", {
-      method: "POST",
-      body: JSON.stringify({
-        telegram_chat_id: document.getElementById("telegramChatIdInput").value,
-      }),
-    });
-    state.flashMessage = "Telegram connected successfully.";
-    state.flashType = "success";
-    await loadDashboard(state.selectedRange);
-    renderApp();
-  } catch (error) {
-    state.flashMessage = error.message;
-    state.flashType = "error";
-    renderApp();
-  }
-}
 
 async function handlePaymentDateSubmit(event) {
   event.preventDefault();

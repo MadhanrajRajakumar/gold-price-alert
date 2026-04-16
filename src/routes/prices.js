@@ -184,25 +184,6 @@ router.post("/onboarding/complete", async (request, response, next) => {
   }
 });
 
-router.post("/telegram-connect", async (request, response, next) => {
-  try {
-    const user = await verifyTelegramConnection(
-      request.user.id,
-      request.body.telegram_chat_id,
-    );
 
-    response.status(201).json({
-      message: "Telegram connected successfully",
-      user: {
-        id: user.id,
-        email: user.email,
-        telegram_chat_id: user.telegram_chat_id,
-        telegram_verified: Boolean(user.telegram_verified),
-      },
-    });
-  } catch (error) {
-    next(error);
-  }
-});
 
 module.exports = router;

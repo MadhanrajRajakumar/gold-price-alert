@@ -72,76 +72,7 @@ async function sendTelegramMessage(chatId, text) {
   }
 }
 
-async function verifyTelegramConnection(userId, telegramChatId) {
-  const normalizedChatId = String(telegramChatId || "").trim();
 
-  if (!normalizedChatId) {
-    const error = new Error("Telegram chat ID is required");
-    error.statusCode = 400;
-    throw error;
-  }
-
-  await prisma.user.update({
-    where: { id: userId },
-    data: {
-      telegram_chat_id: normalizedChatId,
-      telegram_verified: false,
-    },
-  });
-
-  try {
-    await sendTelegramMessage(normalizedChatId, "✅ Telegram connected successfully");
-
-    const user = await prisma.user.update({
-      where: { id: userId },
-      data: {
-        telegram_chat_id: normalizedChatId,
-        telegram_verified: true,
-      },
-    });
-
-    await logActivity(userId, "telegram_connected", {
-      telegram_chat_id: normalizedChatId,
-      telegram_verified: true,
-    });
-
-    return user;
-  } catch (error) {
-    await prisma.user.update({
-      where: { id: userId },
-      data: {
-        telegram_chat_id: normalizedChatId,
-        telegram_verified: false,
-      },
-    });
-
-    await logActivity(userId, "telegram_connect_failed", {
-      telegram_chat_id: normalizedChatId,
-    });
-
-    if (error.statusCode === 500) {
-      throw error;
-    }
-
-    const verificationError = new Error("Invalid chat ID or bot not started");
-    verificationError.statusCode = 400;
-    verificationError.cause = error;
-    throw verificationError;
-  }
-}
-
-async function markTelegramDisconnected(userId, reason) {
-  await prisma.user.update({
-    where: { id: userId },
-    data: {
-      telegram_verified: false,
-    },
-  });
-
-  await logActivity(userId, "telegram_disconnected", {
-    reason,
-  });
-}
 
 let lastUpdateId = 0;
 
@@ -167,11 +98,38 @@ function startTelegramListener() {
         const chatId = message.chat.id;
         const text = message.text.toLowerCase().trim();
         
+        if (text.startsWith("/start")) {
+          const parts = message.text.split(" ");
+          if (parts.length > 1) {
+            const appUserId = Number(parts[1]);
+            if (!isNaN(appUserId)) {
+              const userMatch = await prisma.user.findUnique({ where: { id: appUserId } });
+              if (userMatch) {
+                await prisma.user.update({
+                  where: { id: appUserId },
+                  data: {
+                    telegram_chat_id: String(chatId),
+                    telegram_verified: true
+                  }
+                });
+                
+                await sendTelegramMessage(chatId, `✅ Telegram connected successfully!\n\nYou will now receive:\n• Daily gold alerts\n• Buy/Wait recommendations\n\nType "price" anytime to check current status.`);
+              }
+            }
+          }
+          continue;
+        }
+
         const allowedCommands = ["hi", "price", "gold", "status", "alert"];
         
         if (allowedCommands.includes(text)) {
           const user = await prisma.user.findFirst({ where: { telegram_chat_id: String(chatId) } });
           if (!user) {
+            await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ chat_id: chatId, text: "⚠️ Please connect your account first using the app." })
+            });
             continue;
           }
           
@@ -187,8 +145,6 @@ function startTelegramListener() {
 }
 
 module.exports = {
-  markTelegramDisconnected,
   sendTelegramMessage,
-  verifyTelegramConnection,
   startTelegramListener,
 };
