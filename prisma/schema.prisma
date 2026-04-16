@@ -24,7 +24,12 @@ model User {
   last_alert_sent_at     DateTime?
   onboarding_completed_at DateTime?
   alert_preferences      Json          @default("{\"daily\":true,\"lowest\":true,\"deadline\":true}")
-  created_at             DateTime      @default(now())
+  telegram_messages_sent_today Int           @default(0)
+  last_message_date      DateTime?       @db.Date
+  alert_enabled          Boolean         @default(true)
+  alert_time             String          @default("09:00")
+  analysis_days          Int             @default(30)
+  created_at             DateTime        @default(now())
   goldPrices             GoldPrice[]
   alertLogs              AlertLog[]
   activityLogs           ActivityLog[]

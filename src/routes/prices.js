@@ -10,7 +10,9 @@ const {
   getTrendData,
   saveManualPrice,
   serializeStoredPrice,
+  startOfDay,
   storeDailyGoldPrice,
+  updateAlertSettings,
   updateUserCity,
   updateUserPaymentDate,
 } = require("../services/goldPriceService");
@@ -144,6 +146,21 @@ router.post("/city", async (request, response, next) => {
         email: user.email,
         city: user.city,
       },
+      dashboard: summary,
+    });
+  } catch (error) {
+    error.statusCode = error.statusCode || 400;
+    next(error);
+  }
+});
+
+router.post("/alert-settings", async (request, response, next) => {
+  try {
+    await updateAlertSettings(request.user.id, request.body.alert_time, request.body.analysis_days);
+    const summary = await getDashboardSummary(request.user.id);
+
+    response.status(201).json({
+      message: "Alert settings saved",
       dashboard: summary,
     });
   } catch (error) {

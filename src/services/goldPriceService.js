@@ -747,85 +747,46 @@ function stdDeviation(arr) {
   return Math.sqrt(variance);
 }
 
-async function buildDecision({ userId, currentPrice, daysLeft }) {
-  const history30 = await getHistoricalPrices(userId, DEFAULT_CITY, 30);
+async function buildDecision({ userId, currentPrice, daysLeft, analysisDays = 30 }) {
+  const historyN = await getHistoricalPrices(userId, DEFAULT_CITY, analysisDays);
 
-  if (!history30.length) {
+  if (!historyN.length) {
     return {
       decision: "WAIT",
       confidence: 50,
+      avgPrice: 0,
+      deviation: 0,
+      trend: "NONE",
       reason: "Not enough data"
     };
   }
 
-  const avg30 = average(history30);
-  const avg7 = average(history30.slice(0, 7));
+  const avgN = average(historyN);
+  const avg7 = average(historyN.slice(0, 7));
 
-  const deviation = (currentPrice - avg30) / avg30;
-
-  let score = 0;
-
-  // PRICE POSITION
-  if (deviation <= -0.02) score += 3;
-  else if (deviation <= 0.01) score += 1;
-  else score -= 2;
-
-  // TREND
-  if (avg7 > avg30) score += 2;
-  else score -= 1;
-
-  // DEADLINE PRESSURE
-  if (daysLeft < 5) score += 3;
-  else if (daysLeft < 10) score += 1;
+  const deviationRaw = (currentPrice - avgN) / avgN;
+  const deviationPercent = deviationRaw * 100;
 
   let decision = "WAIT";
 
-  if (score >= 5) decision = "BUY";
-  else if (score < 2) decision = "WAIT";
+  if (currentPrice < avgN * 0.97 && daysLeft > 10) {
+    decision = "BUY";
+  } else if (currentPrice > avgN * 1.03 && daysLeft > 10) {
+    decision = "WAIT";
+  } else if (daysLeft <= 5) {
+    decision = "BUY";
+  } else {
+    decision = "WAIT";
+  }
 
-  // CONFIDENCE (BASED ON VOLATILITY)
-  const volatility = stdDeviation(history30);
-
-  // 1. Volatility confidence (market stability)
-  let volatilityScore = 0;
-  if (volatility < 100) volatilityScore = 40;
-  else if (volatility < 300) volatilityScore = 30;
-  else volatilityScore = 20;
-
-  // 2. Deviation confidence (how strong signal is)
-  const deviationPercent = Math.abs(deviation);
-
-  let deviationScore = 0;
-  if (deviationPercent > 0.03) deviationScore = 30;
-  else if (deviationPercent > 0.015) deviationScore = 20;
-  else deviationScore = 10;
-
-  // 3. Trend confidence
-  let trendScore = 0;
-  if (avg7 > avg30) trendScore = 30;
-  else trendScore = 15;
-
-  // FINAL CONFIDENCE
-  const confidence = Math.min(
-    95,
-    Math.round(volatilityScore + deviationScore + trendScore)
-  );
-
-  console.log({
-    volatility,
-    deviationPercent,
-    volatilityScore,
-    deviationScore,
-    trendScore,
-    finalConfidence: confidence
-  });
+  const confidence = Math.round(Math.min(95, Math.max(50, 70 - Math.abs(deviationPercent))));
 
   return {
     decision,
     confidence,
-    avg30: Number(avg30.toFixed(2)),
-    deviation: Number((deviation * 100).toFixed(2)),
-    trend: avg7 > avg30 ? "UP" : "DOWN"
+    avgPrice: Number(avgN.toFixed(2)),
+    deviation: Number(deviationPercent.toFixed(2)),
+    trend: avg7 > avgN ? "UP" : "DOWN"
   };
 }
 
@@ -847,13 +808,21 @@ function getPaymentWindow(lastPaymentDate, referenceDate = new Date()) {
   };
 }
 
-function getNextTriggerTime(referenceDate = new Date()) {
+function getNextTriggerTime(referenceDate = new Date(), alertTimeStr = "09:00") {
   const localeString = referenceDate.toLocaleString("en-US", {
     timeZone: ALERT_TIMEZONE,
   });
   const localizedDate = new Date(localeString);
   const nextRunLocal = new Date(localizedDate);
-  nextRunLocal.setHours(ALERT_HOUR, ALERT_MINUTE, 0, 0);
+
+  const [hourStr, minuteStr] = (alertTimeStr || "09:00").split(":");
+  let alertHour = parseInt(hourStr, 10);
+  let alertMinute = parseInt(minuteStr, 10);
+
+  if (isNaN(alertHour)) alertHour = 9;
+  if (isNaN(alertMinute)) alertMinute = 0;
+
+  nextRunLocal.setHours(alertHour, alertMinute, 0, 0);
 
   if (nextRunLocal.getTime() <= localizedDate.getTime()) {
     nextRunLocal.setDate(nextRunLocal.getDate() + 1);
@@ -863,14 +832,23 @@ function getNextTriggerTime(referenceDate = new Date()) {
   return new Date(nextRunLocal.getTime() - localOffsetMinutes * 60 * 1000);
 }
 
-function formatNextTriggerLabel(nextTriggerAt, referenceDate = new Date()) {
-  const tomorrow = getNextTriggerTime(referenceDate);
+function formatNextTriggerLabel(nextTriggerAt, referenceDate = new Date(), alertTimeStr = "09:00") {
+  const tomorrow = getNextTriggerTime(referenceDate, alertTimeStr);
   const isTomorrow =
     nextTriggerAt.toISOString().slice(0, 10) === tomorrow.toISOString().slice(0, 10);
 
+  const [hourStr, minuteStr] = (alertTimeStr || "09:00").split(":");
+  let h = parseInt(hourStr, 10);
+  let m = parseInt(minuteStr, 10);
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  h = h % 12;
+  h = h ? h : 12;
+
+  const displayTime = `${h}:${m < 10 ? '0'+m : m} ${ampm}`;
+
   return isTomorrow
-    ? "Next alert at 9:00 AM tomorrow"
-    : "Next alert at 9:00 AM";
+    ? `Next alert at ${displayTime} tomorrow`
+    : `Next alert at ${displayTime}`;
 }
 
 async function updateUserPaymentDate(userId, lastPaymentDate) {
@@ -889,6 +867,16 @@ async function updateUserPaymentDate(userId, lastPaymentDate) {
     data: {
       last_payment_date: parsed,
     },
+  });
+}
+
+async function updateAlertSettings(userId, alertTime = "09:00", analysisDays = 30) {
+  return prisma.user.update({
+    where: { id: userId },
+    data: {
+      alert_time: String(alertTime),
+      analysis_days: Number(analysisDays)
+    }
   });
 }
 
@@ -973,7 +961,7 @@ async function getDashboardSummary(
     decisionData = {
       decision: "WAIT",
       confidence: 50,
-      avg30: 0,
+      avgPrice: 0,
       deviation: 0,
       trend: "NONE"
     };
@@ -981,7 +969,8 @@ async function getDashboardSummary(
     decisionData = await buildDecision({
       userId,
       currentPrice: livePrice.price_per_gram,
-      daysLeft
+      daysLeft,
+      analysisDays: user.analysis_days || 30
     });
   }
 
@@ -989,7 +978,7 @@ async function getDashboardSummary(
     decision: decisionData.decision,
     confidence: decisionData.confidence,
     decision_meta: {
-      avg30: decisionData.avg30,
+      avg30: decisionData.avgPrice,
       deviation_percent: decisionData.deviation,
       trend: decisionData.trend
     }
@@ -997,23 +986,25 @@ async function getDashboardSummary(
 
   console.log({
     currentPrice: livePrice?.price_per_gram,
-    avg30: decisionData.avg30,
+    avgPrice: decisionData.avgPrice,
     deviation: decisionData.deviation,
     trend: decisionData.trend,
     daysLeft,
     decision: decisionData.decision
   });
 
-  const nextTriggerAt = getNextTriggerTime(referenceDate);
+  const nextTriggerAt = getNextTriggerTime(referenceDate, user.alert_time);
 
   return {
     user: {
       ...serializeUser(user),
       city,
+      alert_time: user.alert_time,
+      analysis_days: user.analysis_days,
       supported_cities: SUPPORTED_CITIES,
       alert_preferences: normalizeAlertPreferences(user.alert_preferences),
       next_trigger_at: nextTriggerAt.toISOString(),
-      next_trigger_label: formatNextTriggerLabel(nextTriggerAt, referenceDate),
+      next_trigger_label: formatNextTriggerLabel(nextTriggerAt, referenceDate, user.alert_time),
     },
     onboarding: {
       show_onboarding: !user.onboarding_completed_at,
@@ -1264,11 +1255,14 @@ async function processScheduledAlertsForUser(userId, referenceDate = new Date())
   };
 }
 
-async function processAlertsForAllUsers(referenceDate = new Date()) {
+async function processAlertsForAllUsers(referenceDate = new Date(), filterTimeString = null) {
+  const where = { telegram_verified: true };
+  if (filterTimeString) {
+    where.alert_time = filterTimeString;
+  }
+
   const users = await prisma.user.findMany({
-    where: {
-      telegram_verified: true,
-    },
+    where,
     select: { id: true },
   });
 
@@ -1280,6 +1274,51 @@ async function processAlertsForAllUsers(referenceDate = new Date()) {
   return results;
 }
 
+async function buildGoldAlert(userId) {
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  const city = normalizeCity(user?.city || DEFAULT_CITY);
+  const livePriceData = await fetchLatestGoldPrice(userId, city, new Date());
+  
+  if (!livePriceData || !livePriceData.is_live_available) {
+    return "❌ Gold price is currently unavailable.";
+  }
+
+  const currentPrice = livePriceData.price_per_gram;
+  
+  let paymentWindow = null;
+  if (user?.last_payment_date) {
+    try {
+      paymentWindow = getPaymentWindow(user.last_payment_date, new Date());
+    } catch(e) {}
+  }
+  const daysLeft = paymentWindow ? paymentWindow.daysLeft : 30;
+
+  const analysisDays = user?.analysis_days || 30;
+  
+  const decisionData = await buildDecision({
+    userId,
+    currentPrice,
+    daysLeft,
+    analysisDays
+  });
+
+  const difference = Math.abs(currentPrice - decisionData.avgPrice).toFixed(2);
+  const aboveBelow = currentPrice > decisionData.avgPrice ? "Above" : "Below";
+  
+  const text = `🔥 Gold Alert (${city})
+
+Price: ₹${currentPrice}
+Status: ${decisionData.decision}
+Confidence: ${decisionData.confidence}%
+
+📊 ${aboveBelow} ${analysisDays}-day avg by ₹${difference}
+⏳ Days left: ${daysLeft}
+
+👉 Recommendation: ${decisionData.decision}`;
+
+  return text;
+}
+
 module.exports = {
   ALERT_TIMEZONE,
   DEFAULT_CITY,
@@ -1287,6 +1326,7 @@ module.exports = {
   SUPPORTED_CITIES,
   SUPPORTED_RANGES,
   buildDecision,
+  buildGoldAlert,
   completeOnboarding,
   fetchGoldAPI,
   fetchGoldPrice,
@@ -1307,6 +1347,7 @@ module.exports = {
   serializeStoredPrice,
   startOfDay,
   storeDailyGoldPrice,
+  updateAlertSettings,
   updateUserCity,
   updateUserPaymentDate,
 };

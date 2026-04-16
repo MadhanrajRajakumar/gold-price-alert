@@ -1,7 +1,8 @@
-require("dotenv").config();
+require('dotenv').config();
 
-const cors = require("cors");
-const express = require("express");
+const express = require('express');
+const cors = require('cors');
+
 const path = require("path");
 const prisma = require("./lib/prisma");
 const authRoutes = require("./routes/auth");
@@ -10,6 +11,7 @@ const userRoutes = require("./routes/prices");
 const { validateEnv } = require("./config/env");
 const { requireAuth } = require("./services/authService");
 const { startScheduler } = require("./services/scheduler");
+const { startTelegramListener } = require("./services/telegramService");
 
 const app = express();
 const env = validateEnv();
@@ -47,6 +49,7 @@ async function connectDatabase() {
 async function bootstrap() {
   await connectDatabase();
   startScheduler();
+  startTelegramListener();
 
   const server = app.listen(port, () => {
     console.log(`[gold-price-alert] Server running on port ${port}`);
@@ -68,3 +71,6 @@ bootstrap().catch(async (error) => {
   await prisma.$disconnect();
   process.exit(1);
 });
+
+
+console.log("TOKEN CHECK:", process.env.TELEGRAM_BOT_TOKEN);

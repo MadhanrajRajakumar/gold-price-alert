@@ -340,6 +340,31 @@ function getSettingsHtml(dashboard) {
         </section>
 
         <section class="drawer-section">
+          <form id="alertSettingsForm" class="form-stack">
+            <div class="field">
+              <label for="alertTimeInput">Daily alert time</label>
+              <input
+                id="alertTimeInput"
+                type="time"
+                value="${escapeHtml(user.alert_time || "09:00")}"
+                required
+              />
+            </div>
+            <div class="field">
+              <label for="analysisDaysInput">Analysis days (Trend window)</label>
+              <input
+                id="analysisDaysInput"
+                type="number"
+                min="7" max="365"
+                value="${escapeHtml(user.analysis_days || 30)}"
+                required
+              />
+            </div>
+            <button type="submit" class="ghost-button">Save alert settings</button>
+          </form>
+        </section>
+
+        <section class="drawer-section">
           <form id="cityForm" class="form-stack">
             <div class="field">
               <label for="cityInput">History city</label>
@@ -691,6 +716,7 @@ function attachDashboardEvents() {
   }
 
   document.getElementById("telegramForm")?.addEventListener("submit", handleTelegramSubmit);
+  document.getElementById("alertSettingsForm")?.addEventListener("submit", handleAlertSettingsSubmit);
   document.getElementById("paymentDateForm")?.addEventListener("submit", handlePaymentDateSubmit);
   document.getElementById("cityForm")?.addEventListener("submit", handleCitySubmit);
   document.getElementById("manualPriceForm")?.addEventListener("submit", handleManualPriceSubmit);
@@ -888,6 +914,28 @@ async function handleCitySubmit(event) {
       }),
     });
     state.flashMessage = "City saved.";
+    state.flashType = "success";
+    await loadDashboard(state.selectedRange);
+    renderApp();
+  } catch (error) {
+    state.flashMessage = error.message;
+    state.flashType = "error";
+    renderApp();
+  }
+}
+
+async function handleAlertSettingsSubmit(event) {
+  event.preventDefault();
+
+  try {
+    await requestJson("/api/me/alert-settings", {
+      method: "POST",
+      body: JSON.stringify({
+        alert_time: document.getElementById("alertTimeInput").value,
+        analysis_days: Number(document.getElementById("analysisDaysInput").value),
+      }),
+    });
+    state.flashMessage = "Alert settings saved.";
     state.flashType = "success";
     await loadDashboard(state.selectedRange);
     renderApp();

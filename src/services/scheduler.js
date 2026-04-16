@@ -5,23 +5,74 @@ const {
   processAlertsForAllUsers,
 } = require("./goldPriceService");
 
-async function runDailyPriceJob() {
-  const results = await processAlertsForAllUsers();
+const prisma = require("../lib/prisma");
 
-  console.log(
-    `[gold-price-alert] processed daily checks for ${results.length} user(s)`,
-  );
+async function runDailyPriceJob() {
+  const { processAlertsForAllUsers, ALERT_TIMEZONE } = require("./goldPriceService");
+  const now = new Date();
+  const timeString = now.toLocaleTimeString("en-US", {
+    timeZone: ALERT_TIMEZONE,
+    hour12: false,
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+
+  const results = await processAlertsForAllUsers(now, timeString);
+
+  if (results.length > 0) {
+    console.log(`[gold-price-alert] processed daily checks for ${results.length} user(s) at ${timeString}`);
+  }
 
   return results;
 }
 
+async function sendDailyTelegramAlerts() {
+  const { buildGoldAlert, ALERT_TIMEZONE } = require("./goldPriceService");
+  const { sendTelegramMessage } = require("./telegramService");
+
+  const now = new Date();
+  const timeString = now.toLocaleTimeString("en-US", {
+    timeZone: ALERT_TIMEZONE,
+    hour12: false,
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+
+  const users = await prisma.user.findMany({
+    where: {
+      telegram_verified: true,
+      alert_enabled: true,
+      alert_time: timeString
+    }
+  });
+
+  let sentCount = 0;
+  for (const user of users) {
+    if (user.telegram_chat_id) {
+      try {
+        const alertMessage = await buildGoldAlert(user.id);
+        await sendTelegramMessage(user.telegram_chat_id, alertMessage);
+        sentCount++;
+      } catch (e) {
+        console.error(`[gold-price-alert] Failed to send to ${user.id}: ${e}`);
+      }
+    }
+  }
+  
+  if (sentCount > 0) {
+    console.log(`[gold-price-alert] Daily Telegram alerts sent to ${sentCount} user(s) at ${timeString}`);
+  }
+}
+
 function startScheduler() {
-  const cronSchedule = process.env.CRON_SCHEDULE || "0 9 * * *";
+  // We enforce minute-by-minute evaluation because users can have custom alert times.
+  const cronSchedule = "* * * * *";
   cron.schedule(
     cronSchedule,
     async () => {
       try {
         await runDailyPriceJob();
+        await sendDailyTelegramAlerts();
       } catch (error) {
         console.error("[gold-price-alert] Daily job failed:", error);
       }
@@ -38,5 +89,6 @@ function startScheduler() {
 
 module.exports = {
   runDailyPriceJob,
+  sendDailyTelegramAlerts,
   startScheduler,
 };
