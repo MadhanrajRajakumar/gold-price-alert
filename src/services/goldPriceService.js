@@ -568,9 +568,9 @@ async function saveManualPrice(
 }
 
 async function getHistoricalRows(userId, city, startDate, endDate) {
+  // Global history: do not filter by user_id
   const rows = await prisma.goldPrice.findMany({
     where: {
-      user_id: userId,
       city: normalizeCity(city),
       date: {
         gte: startOfDay(startDate),
@@ -724,69 +724,89 @@ async function getLowestPriceInLast30Days(
   );
 }
 
-async function getHistoricalPrices(userId, city, days = 30) {
-  const prices = await prisma.goldPrice.findMany({
-    where: {
-      user_id: userId,
-      city: normalizeCity(city)
-    },
-    orderBy: { date: 'desc' },
-    take: days
+async function buildDecision({ userId, currentPrice, daysLeft, analysisDays = 30 }) {
+  const userObj = await prisma.user.findUnique({ where: { id: userId }, select: { city: true } });
+  const city = userObj?.city || "Chennai";
+
+  const historyRaw = await prisma.goldPrice.findMany({
+    where: { city },
+    orderBy: { date: "desc" },
+    take: 100 // fetch a bunch to dedupe correctly
   });
 
-  return prices.map(p => p.price_per_gram);
-}
+  const map = new Map();
+  for (const row of historyRaw) {
+    const key = row.date.toISOString().slice(0, 10);
+    if (!map.has(key)) map.set(key, row);
+  }
+  const history = Array.from(map.values()).slice(0, analysisDays);
 
-function average(arr) {
-  return arr.length === 0 ? 0 : arr.reduce((a, b) => a + b, 0) / arr.length;
-}
-
-function stdDeviation(arr) {
-  const avg = average(arr);
-  const variance = arr.reduce((sum, val) => sum + Math.pow(val - avg, 2), 0) / arr.length;
-  return Math.sqrt(variance);
-}
-
-async function buildDecision({ userId, currentPrice, daysLeft, analysisDays = 30 }) {
-  const historyN = await getHistoricalPrices(userId, DEFAULT_CITY, analysisDays);
-
-  if (!historyN.length) {
+  if (!history || history.length === 0) {
     return {
-      decision: "WAIT",
-      confidence: 50,
-      avgPrice: 0,
+      currentPrice,
+      avg: currentPrice,
+      avgPrice: currentPrice,
       deviation: 0,
-      trend: "NONE",
-      reason: "Not enough data"
+      deviationPercent: 0,
+      trend: "NEUTRAL",
+      decision: "HOLD",
+      confidence: 0,
+      daysLeft,
+      reason: "NO_HISTORY",
+      source: "gold-api"
     };
   }
 
-  const avgN = average(historyN);
-  const avg7 = average(historyN.slice(0, 7));
-
-  const deviationRaw = (currentPrice - avgN) / avgN;
-  const deviationPercent = deviationRaw * 100;
-
-  let decision = "WAIT";
-
-  if (currentPrice < avgN * 0.97 && daysLeft > 10) {
+  const prices = history.map(p => p.price_per_gram);
+  const avg = prices.reduce((sum, val) => sum + val, 0) / prices.length;
+  const deviationPercent = ((currentPrice - avg) / avg) * 100;
+  
+  let trend = "NEUTRAL";
+  if (deviationPercent > 2) trend = "HIGH";
+  else if (deviationPercent < -2) trend = "LOW";
+  
+  let decision = "HOLD";
+  if (trend === "LOW") {
     decision = "BUY";
-  } else if (currentPrice > avgN * 1.03 && daysLeft > 10) {
-    decision = "WAIT";
-  } else if (daysLeft <= 5) {
-    decision = "BUY";
-  } else {
+  } else if (trend === "HIGH") {
     decision = "WAIT";
   }
+  
+  if (daysLeft <= 5 && trend !== "LOW") {
+    decision = "BUY"; // urgency override
+  }
+  
+  const volatility = Math.sqrt(
+    prices.reduce((sum, price) => sum + Math.pow(price - avg, 2), 0) / prices.length
+  );
+  
+  let confidence = 50;
+  if (Math.abs(deviationPercent) > 3) confidence += 20;
+  if (volatility < 100) confidence += 15;
+  if (daysLeft <= 5) confidence += 10;
+  confidence = Math.round(Math.min(confidence, 95));
 
-  const confidence = Math.round(Math.min(95, Math.max(50, 70 - Math.abs(deviationPercent))));
-
-  return {
+  console.log("ANALYSIS:", {
+    currentPrice,
+    avg,
+    deviationPercent,
+    trend,
     decision,
     confidence,
-    avgPrice: Number(avgN.toFixed(2)),
+    historyCount: history.length
+  });
+
+  return {
+    currentPrice,
+    avg: Number(avg.toFixed(2)),
+    avgPrice: Number(avg.toFixed(2)),
+    deviationPercent: Number(deviationPercent.toFixed(2)),
     deviation: Number(deviationPercent.toFixed(2)),
-    trend: avg7 > avgN ? "UP" : "DOWN"
+    trend,
+    decision,
+    confidence,
+    daysLeft,
+    source: "gold-api"
   };
 }
 

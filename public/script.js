@@ -135,7 +135,7 @@ function getPriceChangeMetrics(dashboard) {
   if (!livePrice || !points.length) {
     return {
       delta: null,
-      label: "Historical chart available",
+      label: "No historical data available",
       className: "",
     };
   }
