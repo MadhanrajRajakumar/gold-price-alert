@@ -718,7 +718,14 @@ async function getLowestPriceInLast30Days(
   if (!prices.length) {
     return null;
   }
-
+  if (!prices.length) {
+    return {
+      decision: "HOLD",
+      confidence: 0,
+      avgPrice: currentPrice,
+      trend: "NONE"
+    };
+  }
   return prices.reduce((current, candidate) =>
     candidate.price_per_gram < current.price_per_gram ? candidate : current,
   );
@@ -737,76 +744,159 @@ async function buildDecision({ userId, currentPrice, daysLeft, analysisDays = 30
   const map = new Map();
   for (const row of historyRaw) {
     const key = row.date.toISOString().slice(0, 10);
-    if (!map.has(key)) map.set(key, row);
+    if (
+      !map.has(key) ||
+      new Date(row.fetched_at) > new Date(map.get(key).fetched_at)
+    ) {
+      map.set(key, row);
+    }
   }
-  const history = Array.from(map.values()).slice(0, analysisDays);
+  const history = Array.from(map.values())
+    .sort((a, b) => new Date(b.date) - new Date(a.date)) // ensure desc
+    .slice(0, analysisDays);
 
   if (!history || history.length === 0) {
     return {
-      currentPrice,
-      avg: currentPrice,
-      avgPrice: currentPrice,
-      deviation: 0,
-      deviationPercent: 0,
-      trend: "NEUTRAL",
       decision: "HOLD",
       confidence: 0,
+      avgPrice: currentPrice,
+      trend: "NONE",
+      currentPrice,
+      avg: currentPrice,
+      deviationPercent: 0,
+      deviation: 0,
       daysLeft,
-      reason: "NO_HISTORY",
       source: "gold-api"
     };
   }
 
-  const prices = history.map(p => p.price_per_gram);
+  const rawPrices = history.map(p => p.price_per_gram);
+  const avgTemp = rawPrices.reduce((a, b) => a + b, 0) / rawPrices.length;
+
+  const prices = rawPrices.filter(p => Math.abs(p - avgTemp) < avgTemp * 0.2);
+  
+  if (prices.length < 2) {
+    return {
+      decision: "HOLD",
+      confidence: 0,
+      avgPrice: currentPrice,
+      trend: "NONE",
+      currentPrice,
+      avg: currentPrice,
+      deviationPercent: 0,
+      deviation: 0,
+      daysLeft,
+      source: "gold-api"
+    };
+  }
+
+  // 1. avg
   const avg = prices.reduce((sum, val) => sum + val, 0) / prices.length;
-  const deviationPercent = ((currentPrice - avg) / avg) * 100;
-  
-  let trend = "NEUTRAL";
-  if (deviationPercent > 2) trend = "HIGH";
-  else if (deviationPercent < -2) trend = "LOW";
-  
+
+  // 2. avgVolatility
+  const avgVolatility = prices.reduce((sum, price, i, arr) => {
+    if (i === 0) return sum;
+    return sum + Math.abs(price - arr[i - 1]);
+  }, 0) / prices.length;
+
+  // 3. volatility
+  const volatility = Math.sqrt(
+    prices.reduce((sum, price) => sum + Math.pow(price - avg, 2), 0) / (prices.length - 1 || 1)
+  );
+
+  // 4. zScore
+  const zScore = (currentPrice - avg) / (volatility || 1);
+
+  // 5. momentum
+  const recentPrices = prices.length >= 5 ? prices.slice(0, 5) : prices;
+  let momentum = 0;
+
+  if (recentPrices.length >= 3) {
+    const first = recentPrices[recentPrices.length - 1];
+    const last = recentPrices[0];
+    momentum = last - first;
+  }
+
+  let momentumSignal = "WEAK";
+  const momentumThreshold = Math.max(volatility * 0.5, avg * 0.0015);
+
+  if (momentum > momentumThreshold) momentumSignal = "STRONG_UP";
+  if (momentum < -momentumThreshold) momentumSignal = "STRONG_DOWN";
+
+  // 6. trendDirection
+  let trendDirection = "FLAT";
+  if (recentPrices.length >= 5) {
+    const firstHalfAvg = recentPrices.slice(0, Math.floor(recentPrices.length / 2))
+      .reduce((a, b) => a + b, 0) / Math.floor(recentPrices.length / 2);
+
+    const secondHalfAvg = recentPrices.slice(Math.floor(recentPrices.length / 2))
+      .reduce((a, b) => a + b, 0) / Math.ceil(recentPrices.length / 2);
+
+    if (firstHalfAvg > secondHalfAvg) trendDirection = "UP";
+    else if (firstHalfAvg < secondHalfAvg) trendDirection = "DOWN";
+  }
+
+  // 7. decision
   let decision = "HOLD";
-  if (trend === "LOW") {
+
+  if (Math.abs(zScore) < 0.5) {
+    decision = "HOLD";
+  } else if (zScore < -1.2 && momentumSignal !== "STRONG_UP") {
     decision = "BUY";
-  } else if (trend === "HIGH") {
+  } else if (zScore > 1.2 && momentumSignal !== "STRONG_DOWN") {
     decision = "WAIT";
   }
-  
-  if (daysLeft <= 5 && trend !== "LOW") {
-    decision = "BUY"; // urgency override
-  }
-  
-  const volatility = Math.sqrt(
-    prices.reduce((sum, price) => sum + Math.pow(price - avg, 2), 0) / prices.length
-  );
-  
-  let confidence = 50;
-  if (Math.abs(deviationPercent) > 3) confidence += 20;
-  if (volatility < 100) confidence += 15;
-  if (daysLeft <= 5) confidence += 10;
-  confidence = Math.round(Math.min(confidence, 95));
 
-  console.log("ANALYSIS:", {
+  if (daysLeft <= 3 && decision !== "BUY") {
+    decision = "BUY";
+  }
+
+  // 8. confidence
+  let confidence = 40;
+
+  confidence += Math.min(Math.abs(zScore) * 10, 20);
+
+  if (prices.length >= 25) confidence += 10;
+
+  if (volatility < avgVolatility) confidence += 10;
+
+  if (momentumSignal.includes("STRONG") && Math.abs(zScore) > 0.8) {
+    confidence += 10;
+  }
+
+  if (daysLeft <= 5) confidence += 10;
+
+  confidence = Math.min(Math.round(confidence), 95);
+
+  console.log("SMART ANALYSIS:", {
     currentPrice,
     avg,
-    deviationPercent,
-    trend,
+    zScore,
+    momentumSignal,
+    trendDirection,
+    volatility,
     decision,
     confidence,
-    historyCount: history.length
+    daysLeft
   });
 
   return {
     currentPrice,
     avg: Number(avg.toFixed(2)),
     avgPrice: Number(avg.toFixed(2)),
-    deviationPercent: Number(deviationPercent.toFixed(2)),
-    deviation: Number(deviationPercent.toFixed(2)),
-    trend,
+    deviationPercent: Number(((currentPrice - avg) / avg * 100).toFixed(2)),
+    deviation: Number((currentPrice - avg).toFixed(2)),
+    trend: trendDirection,
     decision,
     confidence,
     daysLeft,
-    source: "gold-api"
+    source: "gold-api",
+    meta: {
+      zScore: Number(zScore.toFixed(2)),
+      momentum: momentumSignal,
+      volatility: Number(volatility.toFixed(2)),
+      trendDirection
+    }
   };
 }
 
@@ -864,7 +954,7 @@ function formatNextTriggerLabel(nextTriggerAt, referenceDate = new Date(), alert
   h = h % 12;
   h = h ? h : 12;
 
-  const displayTime = `${h}:${m < 10 ? '0'+m : m} ${ampm}`;
+  const displayTime = `${h}:${m < 10 ? '0' + m : m} ${ampm}`;
 
   return isTomorrow
     ? `Next alert at ${displayTime} tomorrow`
@@ -1298,23 +1388,23 @@ async function buildGoldAlert(userId) {
   const user = await prisma.user.findUnique({ where: { id: userId } });
   const city = normalizeCity(user?.city || DEFAULT_CITY);
   const livePriceData = await fetchLatestGoldPrice(userId, city, new Date());
-  
+
   if (!livePriceData || !livePriceData.is_live_available) {
     return "❌ Gold price is currently unavailable.";
   }
 
   const currentPrice = livePriceData.price_per_gram;
-  
+
   let paymentWindow = null;
   if (user?.last_payment_date) {
     try {
       paymentWindow = getPaymentWindow(user.last_payment_date, new Date());
-    } catch(e) {}
+    } catch (e) { }
   }
   const daysLeft = paymentWindow ? paymentWindow.daysLeft : 30;
 
   const analysisDays = user?.analysis_days || 30;
-  
+
   const decisionData = await buildDecision({
     userId,
     currentPrice,
@@ -1324,7 +1414,7 @@ async function buildGoldAlert(userId) {
 
   const difference = Math.abs(currentPrice - decisionData.avgPrice).toFixed(2);
   const aboveBelow = currentPrice > decisionData.avgPrice ? "Above" : "Below";
-  
+
   const text = `🔥 Gold Alert (${city})
 
 Price: ₹${currentPrice}
