@@ -854,6 +854,69 @@ async function buildDecision({ userId, currentPrice, lastPaymentDate, referenceD
     waitRisk = "MEDIUM";
   }
   const trend = getShortTrend(filteredRows);
+  const recent = filteredRows.slice(0, 5);
+
+  let predictedMin = currentPrice;
+  let predictedMax = currentPrice;
+
+  if (recent.length >= 3) {
+    const changes = [];
+
+    for (let i = 0; i < recent.length - 1; i++) {
+      changes.push(
+        recent[i].price_per_gram - recent[i + 1].price_per_gram
+      );
+    }
+
+    const avgChange =
+      changes.reduce((sum, val) => sum + val, 0) / changes.length;
+
+    const volatility =
+      Math.sqrt(
+        changes.reduce((sum, val) => sum + Math.pow(val - avgChange, 2), 0) /
+          changes.length
+      ) || 50;
+
+    const trendBias = avgChange * 2;
+
+    const movement = Math.min(Math.abs(trendBias) + volatility, currentPrice * 0.015);
+
+    predictedMin = currentPrice - movement;
+    predictedMax = currentPrice + movement;
+  }
+
+  const prediction_3d = {
+    min: Math.round(predictedMin),
+    max: Math.round(predictedMax),
+    expected: Math.round((predictedMin + predictedMax) / 2),
+  };
+  const probabilityRows = filteredRows.slice(0, 7);
+
+  let dropProbability = 0.5;
+
+  if (probabilityRows.length >= 4) {
+    let downDays = 0;
+
+    for (let i = 0; i < probabilityRows.length - 1; i++) {
+      if (probabilityRows[i].price_per_gram < probabilityRows[i + 1].price_per_gram) {
+        downDays++;
+      }
+    }
+
+    const trendFactor = downDays / (probabilityRows.length - 1);
+
+    const positionFactor = 1 - rangePosition;
+
+    const urgencyPenalty = urgency * 0.3;
+
+    dropProbability = clamp(
+      trendFactor * 0.5 + positionFactor * 0.4 - urgencyPenalty,
+      0.05,
+      0.95
+    );
+  }
+
+  const dropProbabilityPct = Math.round(dropProbability * 100);
 
   const missedLow = currentPrice > lowestPrice * 1.03;
 
@@ -919,6 +982,8 @@ async function buildDecision({ userId, currentPrice, lastPaymentDate, referenceD
     avgPrice: Number(avgPrice.toFixed(2)),
     deviationPercent: Number(deviationPercent.toFixed(2)),
     deviation: Number(deviation.toFixed(2)),
+    prediction_3d,
+    drop_probability: dropProbabilityPct,
     source: "gold-api",
     meta: {
       windowStart: windowStart.toISOString().slice(0, 10),
@@ -1150,15 +1215,15 @@ async function getDashboardSummary(
       wait_risk: decisionData.waitRisk,
       wait_risk_score: decisionData.waitRiskScore,
       distance_from_low: decisionData.distanceFromLow,
-      avg30: decisionData.avgPrice,
       missed_low: decisionData.missedLow,
-      deviation_percent: decisionData.deviationPercent ?? 0,
       trend: decisionData.trend,
       lowest_price: decisionData.lowestPrice,
       highest_price: decisionData.highestPrice,
       range_position: decisionData.rangePosition,
       urgency: decisionData.urgency,
       days_left: decisionData.daysLeft,
+      prediction_3d: decisionData.prediction_3d,
+      drop_probability: decisionData.drop_probability,
       fallback_mode: decisionData.meta?.fallbackMode || null,
     },
   };

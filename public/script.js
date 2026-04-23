@@ -159,29 +159,19 @@ function getPriceChangeMetrics(dashboard) {
     return { delta, label, className };
   }
 
-  const points = dashboard?.chart?.points || [];
-  if (!livePrice || !points.length) {
-    return {
-      delta: null,
-      label: "No historical data available",
-      className: "",
-    };
-  }
-
-  const average =
-    points.reduce((sum, point) => sum + Number(point.price_per_gram || 0), 0) / points.length;
-  const delta = Number(livePrice) - average;
-  const className = delta < 0 ? "positive" : delta > 0 ? "negative" : "";
-  const label = "Trend data fallback";
-
-  return { delta, label, className };
+  return {
+    delta: null,
+    label: livePrice ? "Cycle range unavailable" : "No historical data available",
+    className: "",
+  };
 }
 
 function getDecisionPresentation(dashboard) {
   const label = dashboard?.decision?.decision || dashboard?.decision?.label || "WAIT";
   const confidence = dashboard?.decision?.confidence ?? 50;
   const lower = label.toLowerCase();
-  const buyType = dashboard?.decision?.decision_meta?.buy_type;
+  const rawBuyType = dashboard?.decision?.decision_meta?.buy_type;
+  const buyType = rawBuyType && rawBuyType !== "NONE" ? rawBuyType : "";
 
   let headline = "WAIT";
   let tone = "wait";
@@ -214,30 +204,30 @@ function getDecisionSupport(dashboard) {
     return "No decision data available";
   }
 
-  const distance = meta.distance_from_low;
+  const distance = Number(meta.distance_from_low || 0);
   const daysLeft = meta.days_left;
-  const urgencyPct = Math.round(Number(meta.urgency || 0) * 100);
+  const dayLabel = `${daysLeft} day${daysLeft === 1 ? "" : "s"} left`;
   const buyType = meta.buy_type;
-  const waitRisk = meta.wait_risk;
+  const waitRisk = meta.wait_risk || "UNKNOWN";
   const missedLow = meta.missed_low;
 
-  // 🔴 MISSED LOW (MOST IMPORTANT CASE)
   if (missedLow) {
-    return `You missed the lowest. ₹${Math.round(distance)} above cycle low. ${daysLeft} day${daysLeft === 1 ? "" : "s"} left. Waiting risk: ${waitRisk}.`;
+    return `You missed the lowest. ${formatCurrency(Math.round(distance))} above cycle low. ${dayLabel}. Waiting risk: ${waitRisk}.`;
   }
 
-  // 🟢 IDEAL BUY
   if (buyType === "IDEAL") {
-    return `Near lowest price. Good time to buy. ${daysLeft} day${daysLeft === 1 ? "" : "s"} left. Waiting risk: ${waitRisk}.`;
+    return `Near the cycle low. Good time to buy. ${dayLabel}. Waiting risk: ${waitRisk}.`;
   }
 
-  // 🟡 FORCED BUY
+  if (buyType === "RECOVERY") {
+    return `You missed the low, but waiting risk is ${waitRisk}. ${dayLabel}.`;
+  }
+
   if (buyType === "FORCED") {
-    return `Deadline approaching. You may need to buy soon. ${daysLeft} day${daysLeft === 1 ? "" : "s"} left. Waiting risk: ${waitRisk}.`;
+    return `Deadline is close. Buy soon to avoid waiting risk. ${dayLabel}. Waiting risk: ${waitRisk}.`;
   }
 
-  // ⚪ DEFAULT (WAIT / NORMAL CASE)
-  return `₹${Math.round(distance)} above cycle low. Urgency ${urgencyPct}%. ${daysLeft} day${daysLeft === 1 ? "" : "s"} left. Waiting risk: ${waitRisk}.`;
+  return `Current price is ${formatCurrency(Math.round(distance))} above cycle low. ${dayLabel}. Waiting risk: ${waitRisk}.`;
 }
 
 function getDaysLeftCard(paymentWindow, paymentWarning) {
@@ -465,6 +455,8 @@ function renderDashboard() {
   const live = dashboard.live_price || {};
   const priceMetrics = getPriceChangeMetrics(dashboard);
   const decision = getDecisionPresentation(dashboard);
+  const prediction = dashboard?.decision?.decision_meta?.prediction_3d;
+  const dropProbability = dashboard?.decision?.decision_meta?.drop_probability;
   const daysLeft = getDaysLeftCard(dashboard.paymentWindow, dashboard.paymentWarning);
   const liveAvailable = live?.is_live_available === true;
 
@@ -522,15 +514,80 @@ function renderDashboard() {
         </section>
 
         <section class="card decision-card panel ${decision.tone}">
-          <p class="eyebrow">Decision</p>
-          <h2>
-            ${escapeHtml(decision.headline)}
-            ${decision.buyType ? `<span class="badge">${decision.buyType}</span>` : ""}
-          </h2>
-          <div class="decision-support">
-            <strong>Confidence: ${decision.confidence}%</strong>
-            <p class="subtitle">${escapeHtml(getDecisionSupport(dashboard))}</p>
-            <p class="meta">${escapeHtml(dashboard.decision.message || dashboard.message || "")}</p>
+          <div class="decision-top">
+            <div class="decision-main">
+              <h2 class="decision-title">${escapeHtml(decision.headline)}</h2>
+              ${
+                decision.buyType
+                  ? `<span class="decision-tag ${escapeHtml(decision.buyType.toLowerCase())}">${escapeHtml(decision.buyType)}</span>`
+                  : ""
+              }
+            </div>
+            <div class="confidence-ring">
+              <span>${escapeHtml(decision.confidence)}%</span>
+              <small>Confidence</small>
+            </div>
+          </div>
+
+          <div class="decision-body">
+            <p class="decision-message">
+              ${escapeHtml(getDecisionSupport(dashboard))}
+            </p>
+
+            ${
+              prediction
+                ? `<div class="prediction-box">
+                    <div class="prediction-main">
+                      <span>Price prediction (next 3 days)</span>
+                      <strong>
+                        ${escapeHtml(formatCurrency(prediction.expected))}
+                      </strong>
+                    </div>
+
+                    <div class="prediction-range">
+                      Range: ${escapeHtml(formatCurrency(prediction.min))} - ${escapeHtml(formatCurrency(prediction.max))}
+                    </div>
+                  </div>`
+                : ""
+            }
+
+            <div class="probability-box">
+              <span>Chance price will drop</span>
+              <strong>${escapeHtml(dropProbability === null || dropProbability === undefined ? "-" : `${dropProbability}%`)}</strong>
+            </div>
+
+            <div class="decision-metrics">
+              <div>
+                <span>Days left</span>
+                <strong>${escapeHtml(dashboard.decision?.decision_meta?.days_left ?? "-")}</strong>
+              </div>
+              <div>
+                <span>Risk</span>
+                <strong>${escapeHtml(dashboard.decision?.decision_meta?.wait_risk ?? "-")}</strong>
+              </div>
+              <div>
+                <span>Trend</span>
+                <strong>${escapeHtml(dashboard.decision?.decision_meta?.trend ?? "-")}</strong>
+              </div>
+            </div>
+          </div>
+
+          <div class="decision-actions">
+            <div class="action-box">
+              <div class="action-text">
+                ${
+                  dashboard.decision?.decision_meta?.wait_risk === "HIGH"
+                    ? "High risk: price may increase soon"
+                    : dashboard.decision?.decision_meta?.wait_risk === "MEDIUM"
+                      ? "Moderate risk if you wait"
+                      : "Low risk: waiting may help"
+                }
+              </div>
+
+              <button class="primary-button full-width">
+                Buy Now
+              </button>
+            </div>
           </div>
         </section>
 

@@ -187,10 +187,218 @@ p {
     linear-gradient(180deg, rgba(26, 36, 56, 0.98), rgba(18, 24, 38, 0.98));
 }
 
-.decision-card h2 {
+.decision-card h2:not(.decision-title) {
   font-size: clamp(2.7rem, 12vw, 4.8rem);
   line-height: 0.92;
   font-weight: 600;
+}
+
+.decision-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+}
+
+.decision-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.decision-title {
+  font-size: 48px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  line-height: 1;
+}
+
+.decision-tag {
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  background: rgba(255,255,255,0.08);
+}
+
+.decision-tag.ideal {
+  color: #22c55e;
+}
+
+.decision-tag.recovery {
+  color: #f59e0b;
+}
+
+.decision-tag.forced {
+  color: #ef4444;
+}
+
+.confidence-ring {
+  text-align: center;
+  font-weight: bold;
+}
+
+.confidence-ring span,
+.confidence-ring small {
+  display: block;
+}
+
+.confidence-ring small {
+  margin-top: 2px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.decision-body {
+  margin-top: 10px;
+}
+
+.decision-message {
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.decision-metrics {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.decision-metrics div span {
+  display: block;
+  font-size: 12px;
+  color: #9ca3af;
+}
+
+.decision-metrics div strong {
+  font-size: 16px;
+}
+
+.prediction-box {
+  margin-top: 14px;
+  padding: 14px;
+  border-radius: 12px;
+  background: rgba(255,255,255,0.05);
+}
+
+.prediction-main {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 14px;
+}
+
+.prediction-main strong {
+  font-size: 20px;
+  text-align: right;
+}
+
+.prediction-range {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #9ca3af;
+}
+
+.probability-box {
+  margin-top: 10px;
+  padding: 10px;
+  border-radius: 10px;
+  background: rgba(34,197,94,0.08);
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 14px;
+}
+
+.probability-box strong {
+  color: #22c55e;
+}
+
+.decision-actions {
+  margin-top: 16px;
+}
+
+.action-box {
+  margin-top: 16px;
+}
+
+.action-text {
+  font-size: 13px;
+  margin-bottom: 6px;
+  color: #fbbf24;
+}
+
+@media (max-width: 560px) {
+  .decision-top {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .decision-main {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .decision-metrics {
+    flex-direction: column;
+  }
+
+  .prediction-main {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .prediction-main strong {
+    text-align: left;
+  }
+}
+
+@media (max-width: 768px) {
+  .shell {
+    padding: 16px;
+  }
+
+  .decision-title {
+    font-size: 32px;
+  }
+
+  .decision-top {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .confidence-ring {
+    align-self: flex-end;
+  }
+
+  .decision-metrics {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .headline-price strong {
+    font-size: 32px;
+  }
+
+  .prediction-box {
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .probability-box {
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .primary-button {
+    font-size: 16px;
+    padding: 14px;
+  }
 }
 
 .decision-card.wait {
@@ -205,15 +413,6 @@ p {
 .decision-card.avoid,
 .decision-card.overdue {
   border-color: rgba(239, 68, 68, 0.28);
-}
-
-.decision-support {
-  display: grid;
-  gap: 8px;
-}
-
-.decision-support strong {
-  font-weight: 600;
 }
 
 .dashboard-grid {
