@@ -709,194 +709,210 @@ async function getLast30DaysPrices(
   return dedupeHistoricalRows(rows).map((row) => serializeStoredPrice(row, referenceDate));
 }
 
-async function getLowestPriceInLast30Days(
-  userId,
-  city = DEFAULT_CITY,
-  referenceDate = new Date(),
-) {
-  const prices = await getLast30DaysPrices(userId, city, referenceDate);
-  if (!prices.length) {
-    return null;
-  }
-  if (!prices.length) {
-    return {
-      decision: "HOLD",
-      confidence: 0,
-      avgPrice: currentPrice,
-      trend: "NONE"
-    };
-  }
-  return prices.reduce((current, candidate) =>
-    candidate.price_per_gram < current.price_per_gram ? candidate : current,
-  );
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
 }
 
-async function buildDecision({ userId, currentPrice, daysLeft, analysisDays = 30 }) {
+function filterPriceOutliers(rows) {
+  if (!rows.length) {
+    return [];
+  }
+
+  const prices = rows.map((row) => row.price_per_gram);
+  const avg = prices.reduce((sum, price) => sum + price, 0) / prices.length;
+  return rows.filter((row) => Math.abs(row.price_per_gram - avg) < avg * 0.2);
+}
+
+function getFallbackDecision({
+  currentPrice,
+  daysLeft = 0,
+  urgency = 0,
+  fallbackMode = "INSUFFICIENT_DATA",
+}) {
+  return {
+    decision: "WAIT",
+    confidence: 10,
+    lowestPrice: currentPrice,
+    highestPrice: currentPrice,
+    rangePosition: 0.5,
+    urgency,
+    daysLeft,
+    trend: "FLAT",
+    avgPrice: currentPrice,
+    deviationPercent: 0,
+    deviation: 0,
+    source: "gold-api",
+    meta: {
+      rangePosition: 0.5,
+      urgency,
+      trend: "FLAT",
+      fallbackMode,
+    },
+  };
+}
+
+function getShortTrend(rows) {
+  const recentRows = rows.slice(0, Math.min(rows.length, 5));
+
+  if (recentRows.length < 3) {
+    return "FLAT";
+  }
+
+  const oldestPrice = recentRows[recentRows.length - 1].price_per_gram;
+  const newestPrice = recentRows[0].price_per_gram;
+  const delta = newestPrice - oldestPrice;
+  const baseline = oldestPrice || newestPrice || 1;
+  const threshold = baseline * 0.0025;
+
+  if (delta > threshold) {
+    return "UP";
+  }
+
+  if (delta < -threshold) {
+    return "DOWN";
+  }
+
+  return "FLAT";
+}
+
+// async function getLowestPriceInLast30Days(
+//   userId,
+//   city = DEFAULT_CITY,
+//   referenceDate = new Date(),
+// )
+//  {
+//   const prices = await getLast30DaysPrices(userId, city, referenceDate);
+//   if (!prices.length) {
+//     return null;
+//   }
+//   if (!prices.length) {
+//     return {
+//       decision: "HOLD",
+//       confidence: 0,
+//       avgPrice: currentPrice,
+//       trend: "NONE"
+//     };
+//   }
+//   return prices.reduce((current, candidate) =>
+//     candidate.price_per_gram < current.price_per_gram ? candidate : current,
+//   );
+// }
+
+async function buildDecision({ userId, currentPrice, lastPaymentDate, referenceDate = new Date() }) {
   const userObj = await prisma.user.findUnique({ where: { id: userId }, select: { city: true } });
-  const city = userObj?.city || "Chennai";
+  const city = userObj?.city || DEFAULT_CITY;
+  const windowStart = normalizeCalendarDate(lastPaymentDate);
+  const windowEnd = getNextDueDate(lastPaymentDate);
+  const today = startOfDay(referenceDate);
+  const daysLeft = Math.ceil((windowEnd.getTime() - today.getTime()) / DAY_IN_MS);
+  const totalWindowDays = Math.max(1, Math.ceil((windowEnd.getTime() - windowStart.getTime()) / DAY_IN_MS));
+  const daysElapsed = totalWindowDays - daysLeft;
+  const urgency = clamp(
+  Math.pow(daysElapsed / totalWindowDays, 1.5),
+  0,
+  1
+);
 
-  const historyRaw = await prisma.goldPrice.findMany({
-    where: { city },
-    orderBy: { date: "desc" },
-    take: 100 // fetch a bunch to dedupe correctly
-  });
+  let rows = await getHistoricalRows(userId, city, windowStart, today);
 
-  const map = new Map();
-  for (const row of historyRaw) {
-    const key = row.date.toISOString().slice(0, 10);
-    if (
-      !map.has(key) ||
-      new Date(row.fetched_at) > new Date(map.get(key).fetched_at)
-    ) {
-      map.set(key, row);
-    }
+  if (daysElapsed < 5) {
+    rows = await getHistoricalRows(
+      userId,
+      city,
+      new Date(today.getTime() - 29 * DAY_IN_MS),
+      today,
+    );
   }
-  const history = Array.from(map.values())
-    .sort((a, b) => new Date(b.date) - new Date(a.date)) // ensure desc
-    .slice(0, analysisDays);
 
-  if (!history || history.length === 0) {
-    return {
-      decision: "HOLD",
-      confidence: 0,
-      avgPrice: currentPrice,
-      trend: "NONE",
+  const dedupedRows = dedupeHistoricalRows(rows)
+    .sort((a, b) => new Date(b.date) - new Date(a.date));
+  const filteredRows = filterPriceOutliers(dedupedRows)
+    .sort((a, b) => new Date(b.date) - new Date(a.date));
+
+  if (filteredRows.length < 10) {
+    return getFallbackDecision({
       currentPrice,
-      avg: currentPrice,
-      deviationPercent: 0,
-      deviation: 0,
       daysLeft,
-      source: "gold-api"
-    };
+      urgency,
+      fallbackMode: "INSUFFICIENT_DATA",
+    });
   }
 
-  const rawPrices = history.map(p => p.price_per_gram);
-  const avgTemp = rawPrices.reduce((a, b) => a + b, 0) / rawPrices.length;
+  const prices = filteredRows.map((row) => row.price_per_gram);
+  const avgPrice = prices.reduce((sum, price) => sum + price, 0) / prices.length;
+  const lowestPrice = Math.min(...prices);
+  const highestPrice = Math.max(...prices);
+  const rawRangePosition =
+    (currentPrice - lowestPrice) / (highestPrice - lowestPrice || 1);
+  const rangePosition = clamp(rawRangePosition, 0, 1);
+  const trend = getShortTrend(filteredRows);
 
-  const prices = rawPrices.filter(p => Math.abs(p - avgTemp) < avgTemp * 0.2);
-  
-  if (prices.length < 2) {
-    return {
-      decision: "HOLD",
-      confidence: 0,
-      avgPrice: currentPrice,
-      trend: "NONE",
-      currentPrice,
-      avg: currentPrice,
-      deviationPercent: 0,
-      deviation: 0,
-      daysLeft,
-      source: "gold-api"
-    };
+  const missedLow = currentPrice > lowestPrice * 1.03;
+
+  let decision = "WAIT";
+
+  if (currentPrice <= lowestPrice * 1.01) {
+    decision = "BUY";
+  } 
+  else if (missedLow && urgency > 0.6) {
+    decision = "BUY";
+  } 
+  else if (urgency > 0.85) {
+    decision = "BUY";
   }
 
-  // 1. avg
-  const avg = prices.reduce((sum, val) => sum + val, 0) / prices.length;
-
-  // 2. avgVolatility
-  const avgVolatility = prices.reduce((sum, price, i, arr) => {
-    if (i === 0) return sum;
-    return sum + Math.abs(price - arr[i - 1]);
-  }, 0) / prices.length;
-
-  // 3. volatility
-  const volatility = Math.sqrt(
-    prices.reduce((sum, price) => sum + Math.pow(price - avg, 2), 0) / (prices.length - 1 || 1)
+  const priceScore = 1 - rangePosition;
+  const urgencyScore = urgency;
+  const trendScore = trend === "DOWN" ? 1 : 0.5;
+  const confidence = clamp(
+  Math.round((priceScore * 0.6 + urgencyScore * 0.3 + trendScore * 0.1) * 100),
+    10,
+    95,
   );
-
-  // 4. zScore
-  const zScore = (currentPrice - avg) / (volatility || 1);
-
-  // 5. momentum
-  const recentPrices = prices.length >= 5 ? prices.slice(0, 5) : prices;
-  let momentum = 0;
-
-  if (recentPrices.length >= 3) {
-    const first = recentPrices[recentPrices.length - 1];
-    const last = recentPrices[0];
-    momentum = last - first;
-  }
-
-  let momentumSignal = "WEAK";
-  const momentumThreshold = Math.max(volatility * 0.5, avg * 0.0015);
-
-  if (momentum > momentumThreshold) momentumSignal = "STRONG_UP";
-  if (momentum < -momentumThreshold) momentumSignal = "STRONG_DOWN";
-
-  // 6. trendDirection
-  let trendDirection = "FLAT";
-  if (recentPrices.length >= 5) {
-    const firstHalfAvg = recentPrices.slice(0, Math.floor(recentPrices.length / 2))
-      .reduce((a, b) => a + b, 0) / Math.floor(recentPrices.length / 2);
-
-    const secondHalfAvg = recentPrices.slice(Math.floor(recentPrices.length / 2))
-      .reduce((a, b) => a + b, 0) / Math.ceil(recentPrices.length / 2);
-
-    if (firstHalfAvg > secondHalfAvg) trendDirection = "UP";
-    else if (firstHalfAvg < secondHalfAvg) trendDirection = "DOWN";
-  }
-
-  // 7. decision
-  let decision = "HOLD";
-
-  if (Math.abs(zScore) < 0.5) {
-    decision = "HOLD";
-  } else if (zScore < -1.2 && momentumSignal !== "STRONG_UP") {
-    decision = "BUY";
-  } else if (zScore > 1.2 && momentumSignal !== "STRONG_DOWN") {
-    decision = "WAIT";
-  }
-
-  if (daysLeft <= 3 && decision !== "BUY") {
-    decision = "BUY";
-  }
-
-  // 8. confidence
-  let confidence = 40;
-
-  confidence += Math.min(Math.abs(zScore) * 10, 20);
-
-  if (prices.length >= 25) confidence += 10;
-
-  if (volatility < avgVolatility) confidence += 10;
-
-  if (momentumSignal.includes("STRONG") && Math.abs(zScore) > 0.8) {
-    confidence += 10;
-  }
-
-  if (daysLeft <= 5) confidence += 10;
-
-  confidence = Math.min(Math.round(confidence), 95);
+  const deviation = currentPrice - avgPrice;
+  const distanceFromLow = currentPrice - lowestPrice;
+  const distanceFromLowPct = lowestPrice === 0 ? 0 : (distanceFromLow / lowestPrice);
+  const deviationPercent = avgPrice === 0 ? 0 : (deviation / avgPrice) * 100;
 
   console.log("SMART ANALYSIS:", {
     currentPrice,
-    avg,
-    zScore,
-    momentumSignal,
-    trendDirection,
-    volatility,
-    decision,
-    confidence,
-    daysLeft
-  });
-
-  return {
-    currentPrice,
-    avg: Number(avg.toFixed(2)),
-    avgPrice: Number(avg.toFixed(2)),
-    deviationPercent: Number(((currentPrice - avg) / avg * 100).toFixed(2)),
-    deviation: Number((currentPrice - avg).toFixed(2)),
-    trend: trendDirection,
+    lowestPrice,
+    highestPrice,
+    rangePosition,
+    urgency,
+    trend,
     decision,
     confidence,
     daysLeft,
+    totalWindowDays,
+    daysElapsed,
+    points: filteredRows.length,
+  });
+
+  return {
+    decision,
+    confidence,
+    missedLow,
+    distanceFromLow: Number(distanceFromLow.toFixed(2)),
+    distanceFromLowPct: Number(distanceFromLowPct.toFixed(4)),
+    lowestPrice: Number(lowestPrice.toFixed(2)),
+    highestPrice: Number(highestPrice.toFixed(2)),
+    rangePosition: Number(rangePosition.toFixed(4)),
+    urgency: Number(urgency.toFixed(4)),
+    daysLeft,
+    trend,
+    avgPrice: Number(avgPrice.toFixed(2)),
+    deviationPercent: Number(deviationPercent.toFixed(2)),
+    deviation: Number(deviation.toFixed(2)),
     source: "gold-api",
     meta: {
-      zScore: Number(zScore.toFixed(2)),
-      momentum: momentumSignal,
-      volatility: Number(volatility.toFixed(2)),
-      trendDirection
-    }
+      windowStart: windowStart.toISOString().slice(0, 10),
+      windowEnd: windowEnd.toISOString().slice(0, 10),
+      daysElapsed,
+      totalWindowDays,
+      points: filteredRows.length,
+      fallbackMode: daysElapsed < 5 ? "LAST_30_DAYS" : "BILLING_CYCLE",
+    },
   };
 }
 
@@ -1070,17 +1086,44 @@ async function getDashboardSummary(
   if (!livePrice?.is_live_available) {
     decisionData = {
       decision: "WAIT",
-      confidence: 50,
-      avgPrice: 0,
+      confidence: 10,
+      avgPrice: livePrice?.price_per_gram || 0,
       deviation: 0,
-      trend: "NONE"
+      deviationPercent: 0,
+      trend: "FLAT",
+      lowestPrice: livePrice?.price_per_gram || 0,
+      highestPrice: livePrice?.price_per_gram || 0,
+      rangePosition: 0.5,
+      urgency: 0,
+      daysLeft,
+      meta: {
+        fallbackMode: "NO_LIVE_PRICE",
+      },
+    };
+  } else if (!user?.last_payment_date) {
+    decisionData = {
+      decision: "WAIT",
+      confidence: 10,
+      avgPrice: livePrice.price_per_gram,
+      deviation: 0,
+      deviationPercent: 0,
+      trend: "FLAT",
+      lowestPrice: livePrice.price_per_gram,
+      highestPrice: livePrice.price_per_gram,
+      rangePosition: 0.5,
+      urgency: 0,
+      daysLeft,
+      meta: {
+        fallbackMode: "NO_PAYMENT_DATE",
+      },
     };
   } else {
     decisionData = await buildDecision({
       userId,
+      // missedLow,
       currentPrice: livePrice.price_per_gram,
-      daysLeft,
-      analysisDays: user.analysis_days || 30
+      lastPaymentDate: user.last_payment_date,
+      referenceDate,
     });
   }
 
@@ -1088,19 +1131,29 @@ async function getDashboardSummary(
     decision: decisionData.decision,
     confidence: decisionData.confidence,
     decision_meta: {
+      distance_from_low: decisionData.distanceFromLow,
       avg30: decisionData.avgPrice,
-      deviation_percent: decisionData.deviation,
-      trend: decisionData.trend
-    }
+      missed_low: decisionData.missedLow,
+      deviation_percent: decisionData.deviationPercent ?? 0,
+      trend: decisionData.trend,
+      lowest_price: decisionData.lowestPrice,
+      highest_price: decisionData.highestPrice,
+      range_position: decisionData.rangePosition,
+      urgency: decisionData.urgency,
+      days_left: decisionData.daysLeft,
+      fallback_mode: decisionData.meta?.fallbackMode || null,
+    },
   };
 
   console.log({
     currentPrice: livePrice?.price_per_gram,
     avgPrice: decisionData.avgPrice,
-    deviation: decisionData.deviation,
+    deviationPercent: decisionData.deviationPercent,
     trend: decisionData.trend,
-    daysLeft,
-    decision: decisionData.decision
+    daysLeft: decisionData.daysLeft ?? daysLeft,
+    rangePosition: decisionData.rangePosition,
+    urgency: decisionData.urgency,
+    decision: decisionData.decision,
   });
 
   const nextTriggerAt = getNextTriggerTime(referenceDate, user.alert_time);
@@ -1190,10 +1243,10 @@ function buildAlertMessages(summary) {
 
   const messages = [];
 
-  if (
-    summary.chart.lowest &&
-    summary.live_price.price_per_gram <= summary.chart.lowest.price_per_gram
-  ) {
+  const lowest = summary.decision?.decision_meta?.lowest_price;
+  const current = summary.live_price.price_per_gram;
+
+  if (lowest && current <= lowest * 1.01){
     messages.push({
       type: "LOWEST",
       subject: "Gold Price Alert: Today is the low in range",
@@ -1387,7 +1440,8 @@ async function processAlertsForAllUsers(referenceDate = new Date(), filterTimeSt
 async function buildGoldAlert(userId) {
   const user = await prisma.user.findUnique({ where: { id: userId } });
   const city = normalizeCity(user?.city || DEFAULT_CITY);
-  const livePriceData = await fetchLatestGoldPrice(userId, city, new Date());
+  const referenceDate = new Date();
+  const livePriceData = await fetchLatestGoldPrice(userId, city, referenceDate);
 
   if (!livePriceData || !livePriceData.is_live_available) {
     return "❌ Gold price is currently unavailable.";
@@ -1398,22 +1452,26 @@ async function buildGoldAlert(userId) {
   let paymentWindow = null;
   if (user?.last_payment_date) {
     try {
-      paymentWindow = getPaymentWindow(user.last_payment_date, new Date());
+      paymentWindow = getPaymentWindow(user.last_payment_date, referenceDate);
     } catch (e) { }
   }
   const daysLeft = paymentWindow ? paymentWindow.daysLeft : 30;
 
-  const analysisDays = user?.analysis_days || 30;
+  const decisionData = user?.last_payment_date
+    ? await buildDecision({
+        userId,
+        currentPrice,
+        lastPaymentDate: user.last_payment_date,
+        referenceDate,
+      })
+    : getFallbackDecision({ currentPrice, daysLeft, urgency: 0, fallbackMode: "NO_PAYMENT_DATE" });
 
-  const decisionData = await buildDecision({
-    userId,
-    currentPrice,
-    daysLeft,
-    analysisDays
-  });
-
-  const difference = Math.abs(currentPrice - decisionData.avgPrice).toFixed(2);
-  const aboveBelow = currentPrice > decisionData.avgPrice ? "Above" : "Below";
+  const rangePct = Math.round((decisionData.rangePosition ?? 0.5) * 100);
+  const urgencyPct = Math.round((decisionData.urgency ?? 0) * 100);
+  const rangeSummary =
+    decisionData.lowestPrice === decisionData.highestPrice
+      ? `Cycle range unavailable`
+      : `Cycle range ₹${decisionData.lowestPrice.toFixed(2)} - ₹${decisionData.highestPrice.toFixed(2)}`;
 
   const text = `🔥 Gold Alert (${city})
 
@@ -1421,8 +1479,11 @@ Price: ₹${currentPrice}
 Status: ${decisionData.decision}
 Confidence: ${decisionData.confidence}%
 
-📊 ${aboveBelow} ${analysisDays}-day avg by ₹${difference}
-⏳ Days left: ${daysLeft}
+📊 ${rangeSummary}
+📍 Range position: ${rangePct}%
+⏳ Days left: ${decisionData.daysLeft ?? daysLeft}
+⚡ Billing urgency: ${urgencyPct}%
+📈 Trend: ${decisionData.trend}
 
 👉 Recommendation: ${decisionData.decision}`;
 
@@ -1445,7 +1506,7 @@ module.exports = {
   getAlertHistory,
   getDashboardSummary,
   getLast30DaysPrices,
-  getLowestPriceInLast30Days,
+  // getLowestPriceInLast30Days,
   getNextTriggerTime,
   getRecentActivity,
   getTrendData,

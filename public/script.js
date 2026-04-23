@@ -131,6 +131,34 @@ function destroyChart() {
 
 function getPriceChangeMetrics(dashboard) {
   const livePrice = dashboard?.live_price?.price_per_gram;
+  const meta = dashboard?.decision?.decision_meta;
+  const lowestPrice = Number(meta?.lowest_price);
+  const highestPrice = Number(meta?.highest_price);
+  const hasRange =
+    Number.isFinite(lowestPrice) &&
+    Number.isFinite(highestPrice) &&
+    highestPrice >= lowestPrice;
+
+  if (hasRange) {
+    const midpoint = (lowestPrice + highestPrice) / 2;
+    const delta = Number(livePrice) - midpoint;
+    const className = delta < 0 ? "positive" : delta > 0 ? "negative" : "";
+    const rangePosition = Number(meta?.range_position);
+    let label = "Within billing-cycle range";
+
+    if (Number.isFinite(rangePosition)) {
+      if (rangePosition <= 0.2) {
+        label = "Near billing-cycle low";
+      } else if (rangePosition >= 0.8) {
+        label = "Near billing-cycle high";
+      } else {
+        label = "Mid billing-cycle range";
+      }
+    }
+
+    return { delta, label, className };
+  }
+
   const points = dashboard?.chart?.points || [];
   if (!livePrice || !points.length) {
     return {
@@ -144,12 +172,7 @@ function getPriceChangeMetrics(dashboard) {
     points.reduce((sum, point) => sum + Number(point.price_per_gram || 0), 0) / points.length;
   const delta = Number(livePrice) - average;
   const className = delta < 0 ? "positive" : delta > 0 ? "negative" : "";
-  const label =
-    delta < 0
-      ? "Below 30-day average"
-      : delta > 0
-        ? "Above 30-day average"
-        : "At 30-day average";
+  const label = "Trend data fallback";
 
   return { delta, label, className };
 }
@@ -161,7 +184,7 @@ function getDecisionPresentation(dashboard) {
 
   let headline = "WAIT";
   let tone = "wait";
-  if (lower.includes("pay")) {
+  if (lower.includes("buy") || lower.includes("pay")) {
     headline = "BUY";
     tone = "buy";
   } else if (lower.includes("overdue")) {
@@ -179,10 +202,26 @@ function getDecisionPresentation(dashboard) {
 function getDecisionSupport(dashboard) {
   const live = dashboard?.live_price;
   const hasLivePrice = Boolean(live?.price_per_gram);
+  const meta = dashboard?.decision?.decision_meta;
   const { delta, label } = getPriceChangeMetrics(dashboard);
 
   if (!hasLivePrice) {
     return live?.live_error || "Live data unavailable";
+  }
+
+  if (meta && Number.isFinite(Number(meta.range_position))) {
+    const rangePct = Math.round(Number(meta.range_position) * 100);
+    const urgencyPct = Math.round(Number(meta.urgency || 0) * 100);
+    const daysLeft = meta.days_left;
+    const trend = meta.trend || "FLAT";
+    const distance = dashboard?.decision?.decision_meta?.distance_from_low;
+    const missedLow = dashboard?.decision?.decision_meta?.missed_low;
+
+   if (missedLow) {
+    return `You missed the lowest. ₹${Math.round(distance)} above cycle low. ${daysLeft} day${daysLeft === 1 ? "" : "s"} left — consider buying.`;
+  }
+
+  return `${label}. ₹${Math.round(distance)} above cycle low, urgency ${urgencyPct}%, ${daysLeft} day${daysLeft === 1 ? "" : "s"} left, trend ${trend}.`;
   }
 
   if (delta === null) {
@@ -487,7 +526,7 @@ function renderDashboard() {
           <div class="chart-header">
             <div>
               <p class="eyebrow">Trend</p>
-              <h3>30-day price context</h3>
+              <h3>Price trend</h3>
             </div>
             <div class="range-selector">
               ${["1W", "1M", "3M", "6M", "1Y"]
@@ -508,7 +547,7 @@ function renderDashboard() {
 
         <section class="stats-grid">
           <article class="card stat-card panel">
-            <p class="stat-label">30-day low</p>
+            <p class="stat-label">Cycle low</p>
             <div class="stat-value">${escapeHtml(formatCurrency(dashboard.chart.lowest?.price_per_gram))}</div>
             <p class="meta">${escapeHtml(
               dashboard.chart.lowest ? formatDateLabel(dashboard.chart.lowest.date) : "No data",
@@ -516,7 +555,7 @@ function renderDashboard() {
           </article>
 
           <article class="card stat-card panel">
-            <p class="stat-label">30-day high</p>
+            <p class="stat-label">Cycle high</p>
             <div class="stat-value">${escapeHtml(formatCurrency(dashboard.chart.highest?.price_per_gram))}</div>
             <p class="meta">${escapeHtml(
               dashboard.chart.highest ? formatDateLabel(dashboard.chart.highest.date) : "No data",
