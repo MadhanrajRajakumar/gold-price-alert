@@ -845,20 +845,32 @@ async function buildDecision({ userId, currentPrice, lastPaymentDate, referenceD
   const rawRangePosition =
     (currentPrice - lowestPrice) / (highestPrice - lowestPrice || 1);
   const rangePosition = clamp(rawRangePosition, 0, 1);
+  const waitRiskScore = urgency * rangePosition;
+
+  let waitRisk = "LOW";
+  if (waitRiskScore > 0.7) {
+    waitRisk = "HIGH";
+  } else if (waitRiskScore > 0.4) {
+    waitRisk = "MEDIUM";
+  }
   const trend = getShortTrend(filteredRows);
 
   const missedLow = currentPrice > lowestPrice * 1.03;
 
   let decision = "WAIT";
+  let buyType = "NONE";
 
   if (currentPrice <= lowestPrice * 1.01) {
     decision = "BUY";
+    buyType = "IDEAL";
   } 
   else if (missedLow && urgency > 0.6) {
     decision = "BUY";
+    buyType = "RECOVERY";
   } 
   else if (urgency > 0.85) {
     decision = "BUY";
+    buyType = "FORCED";
   }
 
   const priceScore = 1 - rangePosition;
@@ -892,6 +904,9 @@ async function buildDecision({ userId, currentPrice, lastPaymentDate, referenceD
   return {
     decision,
     confidence,
+    buyType,
+    waitRisk,
+    waitRiskScore: Number(waitRiskScore.toFixed(2)),
     missedLow,
     distanceFromLow: Number(distanceFromLow.toFixed(2)),
     distanceFromLowPct: Number(distanceFromLowPct.toFixed(4)),
@@ -1131,6 +1146,9 @@ async function getDashboardSummary(
     decision: decisionData.decision,
     confidence: decisionData.confidence,
     decision_meta: {
+      buy_type: decisionData.buyType,
+      wait_risk: decisionData.waitRisk,
+      wait_risk_score: decisionData.waitRiskScore,
       distance_from_low: decisionData.distanceFromLow,
       avg30: decisionData.avgPrice,
       missed_low: decisionData.missedLow,

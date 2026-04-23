@@ -181,6 +181,7 @@ function getDecisionPresentation(dashboard) {
   const label = dashboard?.decision?.decision || dashboard?.decision?.label || "WAIT";
   const confidence = dashboard?.decision?.confidence ?? 50;
   const lower = label.toLowerCase();
+  const buyType = dashboard?.decision?.decision_meta?.buy_type;
 
   let headline = "WAIT";
   let tone = "wait";
@@ -196,6 +197,7 @@ function getDecisionPresentation(dashboard) {
     headline,
     tone,
     confidence,
+    buyType,
   };
 }
 
@@ -203,32 +205,39 @@ function getDecisionSupport(dashboard) {
   const live = dashboard?.live_price;
   const hasLivePrice = Boolean(live?.price_per_gram);
   const meta = dashboard?.decision?.decision_meta;
-  const { delta, label } = getPriceChangeMetrics(dashboard);
 
   if (!hasLivePrice) {
     return live?.live_error || "Live data unavailable";
   }
 
-  if (meta && Number.isFinite(Number(meta.range_position))) {
-    const rangePct = Math.round(Number(meta.range_position) * 100);
-    const urgencyPct = Math.round(Number(meta.urgency || 0) * 100);
-    const daysLeft = meta.days_left;
-    const trend = meta.trend || "FLAT";
-    const distance = dashboard?.decision?.decision_meta?.distance_from_low;
-    const missedLow = dashboard?.decision?.decision_meta?.missed_low;
-
-   if (missedLow) {
-    return `You missed the lowest. ₹${Math.round(distance)} above cycle low. ${daysLeft} day${daysLeft === 1 ? "" : "s"} left — consider buying.`;
+  if (!meta) {
+    return "No decision data available";
   }
 
-  return `${label}. ₹${Math.round(distance)} above cycle low, urgency ${urgencyPct}%, ${daysLeft} day${daysLeft === 1 ? "" : "s"} left, trend ${trend}.`;
+  const distance = meta.distance_from_low;
+  const daysLeft = meta.days_left;
+  const urgencyPct = Math.round(Number(meta.urgency || 0) * 100);
+  const buyType = meta.buy_type;
+  const waitRisk = meta.wait_risk;
+  const missedLow = meta.missed_low;
+
+  // 🔴 MISSED LOW (MOST IMPORTANT CASE)
+  if (missedLow) {
+    return `You missed the lowest. ₹${Math.round(distance)} above cycle low. ${daysLeft} day${daysLeft === 1 ? "" : "s"} left. Waiting risk: ${waitRisk}.`;
   }
 
-  if (delta === null) {
-    return "Price trend unavailable";
+  // 🟢 IDEAL BUY
+  if (buyType === "IDEAL") {
+    return `Near lowest price. Good time to buy. ${daysLeft} day${daysLeft === 1 ? "" : "s"} left. Waiting risk: ${waitRisk}.`;
   }
 
-  return `${label} by ${formatSignedCurrency(delta)}.`;
+  // 🟡 FORCED BUY
+  if (buyType === "FORCED") {
+    return `Deadline approaching. You may need to buy soon. ${daysLeft} day${daysLeft === 1 ? "" : "s"} left. Waiting risk: ${waitRisk}.`;
+  }
+
+  // ⚪ DEFAULT (WAIT / NORMAL CASE)
+  return `₹${Math.round(distance)} above cycle low. Urgency ${urgencyPct}%. ${daysLeft} day${daysLeft === 1 ? "" : "s"} left. Waiting risk: ${waitRisk}.`;
 }
 
 function getDaysLeftCard(paymentWindow, paymentWarning) {
@@ -514,7 +523,10 @@ function renderDashboard() {
 
         <section class="card decision-card panel ${decision.tone}">
           <p class="eyebrow">Decision</p>
-          <h2>${escapeHtml(decision.headline)}</h2>
+          <h2>
+            ${escapeHtml(decision.headline)}
+            ${decision.buyType ? `<span class="badge">${decision.buyType}</span>` : ""}
+          </h2>
           <div class="decision-support">
             <strong>Confidence: ${decision.confidence}%</strong>
             <p class="subtitle">${escapeHtml(getDecisionSupport(dashboard))}</p>
