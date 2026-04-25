@@ -729,9 +729,17 @@ function getFallbackDecision({
   urgency = 0,
   fallbackMode = "INSUFFICIENT_DATA",
 }) {
+  const premiumPrediction = {
+    best_day: null,
+    expected_price: null,
+    confidence: null,
+    locked: true,
+  };
+
   return {
     decision: "WAIT",
     confidence: 10,
+    decisionNarrative: "WAITING_SAFE",
     lowestPrice: currentPrice,
     highestPrice: currentPrice,
     rangePosition: 0.5,
@@ -741,6 +749,19 @@ function getFallbackDecision({
     avgPrice: currentPrice,
     deviationPercent: 0,
     deviation: 0,
+    prediction_3d: {
+      min: Math.round(currentPrice),
+      max: Math.round(currentPrice),
+      expected: Math.round(currentPrice),
+    },
+    drop_probability: 50,
+    extra_cost: 0,
+    waitScenario: {
+      risk_increase: 0,
+      potential_saving: 0,
+    },
+    data_points: 0,
+    premiumPrediction,
     source: "gold-api",
     meta: {
       rangePosition: 0.5,
@@ -919,14 +940,6 @@ async function buildDecision({ userId, currentPrice, lastPaymentDate, referenceD
     );
   }
   // 🔥 FIX: Align probability with trend
-  if (trend === "DOWN") {
-    dropProbability += 0.15;
-  } else if (trend === "UP") {
-    dropProbability -= 0.15;
-  }
-
-  // clamp again after adjustment
-  dropProbability = clamp(dropProbability, 0.05, 0.95);
   const dropProbabilityPct = Math.round(dropProbability * 100);
 
   const missedLow = currentPrice > lowestPrice * 1.03;
@@ -947,6 +960,14 @@ async function buildDecision({ userId, currentPrice, lastPaymentDate, referenceD
     buyType = "FORCED";
   }
 
+  let decisionNarrative = "";
+
+  if (decision === "BUY") {
+    decisionNarrative = "WAITING_RISKY";
+  } else {
+    decisionNarrative = "WAITING_SAFE";
+  }
+
   const priceScore = 1 - rangePosition;
   const urgencyScore = urgency;
   const trendScore = trend === "DOWN" ? 1 : 0.5;
@@ -959,6 +980,21 @@ async function buildDecision({ userId, currentPrice, lastPaymentDate, referenceD
   const distanceFromLow = currentPrice - lowestPrice;
   const distanceFromLowPct = lowestPrice === 0 ? 0 : (distanceFromLow / lowestPrice);
   const deviationPercent = avgPrice === 0 ? 0 : (deviation / avgPrice) * 100;
+  // const typicalWeight = 10;
+  const extraCost = Math.round(distanceFromLow);
+  const worstCaseIncrease = Math.round(predictedMax - currentPrice);
+  const bestCaseDrop = Math.round(currentPrice - predictedMin);
+  const waitScenario = {
+    risk_increase: worstCaseIncrease,
+    potential_saving: bestCaseDrop,
+  };
+  const dataPoints = filteredRows.length;
+  const premiumPrediction = {
+    best_day: null,
+    expected_price: null,
+    confidence: null,
+    locked: true,
+  };
 
   console.log("SMART ANALYSIS:", {
     currentPrice,
@@ -979,6 +1015,7 @@ async function buildDecision({ userId, currentPrice, lastPaymentDate, referenceD
     decision,
     confidence,
     buyType,
+    decisionNarrative,
     waitRisk,
     waitRiskScore: Number(waitRiskScore.toFixed(2)),
     missedLow,
@@ -995,6 +1032,10 @@ async function buildDecision({ userId, currentPrice, lastPaymentDate, referenceD
     deviation: Number(deviation.toFixed(2)),
     prediction_3d,
     drop_probability: dropProbabilityPct,
+    extra_cost: extraCost,
+    waitScenario,
+    data_points: dataPoints,
+    premiumPrediction,
     source: "gold-api",
     meta: {
       windowStart: windowStart.toISOString().slice(0, 10),
@@ -1178,6 +1219,7 @@ async function getDashboardSummary(
     decisionData = {
       decision: "WAIT",
       confidence: 10,
+      decisionNarrative: "WAITING_SAFE",
       avgPrice: livePrice?.price_per_gram || 0,
       deviation: 0,
       deviationPercent: 0,
@@ -1187,6 +1229,24 @@ async function getDashboardSummary(
       rangePosition: 0.5,
       urgency: 0,
       daysLeft,
+      prediction_3d: {
+        min: Math.round(livePrice?.price_per_gram || 0),
+        max: Math.round(livePrice?.price_per_gram || 0),
+        expected: Math.round(livePrice?.price_per_gram || 0),
+      },
+      drop_probability: 50,
+      extra_cost: 0,
+      waitScenario: {
+        risk_increase: 0,
+        potential_saving: 0,
+      },
+      data_points: 0,
+      premiumPrediction: {
+        best_day: null,
+        expected_price: null,
+        confidence: null,
+        locked: true,
+      },
       meta: {
         fallbackMode: "NO_LIVE_PRICE",
       },
@@ -1195,6 +1255,7 @@ async function getDashboardSummary(
     decisionData = {
       decision: "WAIT",
       confidence: 10,
+      decisionNarrative: "WAITING_SAFE",
       avgPrice: livePrice.price_per_gram,
       deviation: 0,
       deviationPercent: 0,
@@ -1204,6 +1265,24 @@ async function getDashboardSummary(
       rangePosition: 0.5,
       urgency: 0,
       daysLeft,
+      prediction_3d: {
+        min: Math.round(livePrice.price_per_gram),
+        max: Math.round(livePrice.price_per_gram),
+        expected: Math.round(livePrice.price_per_gram),
+      },
+      drop_probability: 50,
+      extra_cost: 0,
+      waitScenario: {
+        risk_increase: 0,
+        potential_saving: 0,
+      },
+      data_points: 0,
+      premiumPrediction: {
+        best_day: null,
+        expected_price: null,
+        confidence: null,
+        locked: true,
+      },
       meta: {
         fallbackMode: "NO_PAYMENT_DATE",
       },
@@ -1223,9 +1302,11 @@ async function getDashboardSummary(
     confidence: decisionData.confidence,
     decision_meta: {
       buy_type: decisionData.buyType,
+      decision_narrative: decisionData.decisionNarrative,
       wait_risk: decisionData.waitRisk,
       wait_risk_score: decisionData.waitRiskScore,
       distance_from_low: decisionData.distanceFromLow,
+      extra_cost: decisionData.extra_cost,
       missed_low: decisionData.missedLow,
       trend: decisionData.trend,
       lowest_price: decisionData.lowestPrice,
@@ -1235,6 +1316,9 @@ async function getDashboardSummary(
       days_left: decisionData.daysLeft,
       prediction_3d: decisionData.prediction_3d,
       drop_probability: decisionData.drop_probability,
+      wait_scenario: decisionData.waitScenario,
+      data_points: decisionData.data_points,
+      premium_prediction: decisionData.premiumPrediction,
       fallback_mode: decisionData.meta?.fallbackMode || null,
     },
   };

@@ -258,6 +258,7 @@ p {
 .decision-message {
   font-size: 14px;
   line-height: 1.6;
+  white-space: pre-line;
 }
 
 .decision-metrics {
@@ -302,6 +303,30 @@ p {
   color: #9ca3af;
 }
 
+.impact-box {
+  margin-top: 14px;
+  padding: 14px;
+  border-radius: 12px;
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.impact-main {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 14px;
+}
+
+.impact-main span {
+  color: var(--text-secondary);
+}
+
+.impact-main strong {
+  font-size: 22px;
+  color: #fbbf24;
+  text-align: right;
+}
+
 .probability-box {
   margin-top: 10px;
   padding: 10px;
@@ -317,8 +342,29 @@ p {
   color: #22c55e;
 }
 
+.premium-box {
+  margin-top: 18px;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(212, 175, 55, 0.08);
+}
+
+.premium-box > span {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 13px;
+  color: #f3d36a;
+}
+.premium-box strong {
+  font-size: 15px;
+}
+
+.premium-box strong {
+  color: var(--gold);
+}
+
 .decision-actions {
-  margin-top: 16px;
+  margin-top: 18px;
 }
 
 .action-box {
@@ -388,6 +434,16 @@ p {
   .prediction-box {
     flex-direction: column;
     gap: 6px;
+  }
+
+  .impact-main {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .impact-main strong {
+    text-align: left;
   }
 
   .probability-box {
@@ -754,20 +810,4 @@ p {
     height: 100vh;
     border-radius: 0;
   }
-}
-/* ===== Probability Bar (NEW) ===== */
-
-.probability-bar {
-  height: 6px;
-  background: rgba(255,255,255,0.1);
-  border-radius: 999px;
-  margin-top: 6px;
-  overflow: hidden;
-}
-
-.probability-fill {
-  height: 100%;
-  background: #22c55e;
-  border-radius: 999px;
-  transition: width 0.4s ease;
 }
