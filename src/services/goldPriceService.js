@@ -879,7 +879,10 @@ async function buildDecision({ userId, currentPrice, lastPaymentDate, referenceD
 
     const trendBias = avgChange * 2;
 
-    const movement = Math.min(Math.abs(trendBias) + volatility, currentPrice * 0.015);
+    const movement = Math.min(
+    Math.abs(trendBias) + volatility * 0.5,
+    currentPrice * 0.01
+  );
 
     predictedMin = currentPrice - movement;
     predictedMax = currentPrice + movement;
@@ -915,7 +918,15 @@ async function buildDecision({ userId, currentPrice, lastPaymentDate, referenceD
       0.95
     );
   }
+  // 🔥 FIX: Align probability with trend
+  if (trend === "DOWN") {
+    dropProbability += 0.15;
+  } else if (trend === "UP") {
+    dropProbability -= 0.15;
+  }
 
+  // clamp again after adjustment
+  dropProbability = clamp(dropProbability, 0.05, 0.95);
   const dropProbabilityPct = Math.round(dropProbability * 100);
 
   const missedLow = currentPrice > lowestPrice * 1.03;

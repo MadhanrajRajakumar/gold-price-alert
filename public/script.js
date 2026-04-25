@@ -171,7 +171,11 @@ function getDecisionPresentation(dashboard) {
   const confidence = dashboard?.decision?.confidence ?? 50;
   const lower = label.toLowerCase();
   const rawBuyType = dashboard?.decision?.decision_meta?.buy_type;
-  const buyType = rawBuyType && rawBuyType !== "NONE" ? rawBuyType : "";
+  let buyType = "";
+
+  if (rawBuyType === "RECOVERY") buyType = "LATE BUY";
+  else if (rawBuyType === "IDEAL") buyType = "BEST PRICE";
+  else if (rawBuyType === "FORCED") buyType = "DEADLINE";
 
   let headline = "WAIT";
   let tone = "wait";
@@ -552,6 +556,9 @@ function renderDashboard() {
             }
 
             <div class="probability-box">
+            <div class="probability-bar">
+              <div class="probability-fill" style="width: ${dropProbability || 0}%"></div>
+            </div>
               <span>Chance price will drop</span>
               <strong>${escapeHtml(dropProbability === null || dropProbability === undefined ? "-" : `${dropProbability}%`)}</strong>
             </div>
@@ -585,8 +592,14 @@ function renderDashboard() {
               </div>
 
               <button class="primary-button full-width">
-                Buy Now
-              </button>
+              ${
+                dashboard.decision?.decision_meta?.wait_risk === "HIGH"
+                  ? "Buy now — price may rise"
+                  : dashboard.decision?.decision_meta?.wait_risk === "MEDIUM"
+                  ? "Buy now — avoid risk"
+                  : "Buy now — safe decision"
+              }
+            </button>
             </div>
           </div>
         </section>

@@ -755,3 +755,19 @@ p {
     border-radius: 0;
   }
 }
+/* ===== Probability Bar (NEW) ===== */
+
+.probability-bar {
+  height: 6px;
+  background: rgba(255,255,255,0.1);
+  border-radius: 999px;
+  margin-top: 6px;
+  overflow: hidden;
+}
+
+.probability-fill {
+  height: 100%;
+  background: #22c55e;
+  border-radius: 999px;
+  transition: width 0.4s ease;
+}
