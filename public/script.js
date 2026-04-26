@@ -211,14 +211,36 @@ function getDecisionSupport(dashboard) {
 
   const daysLeft = meta.days_left;
   const dayLabel = `${daysLeft} day${daysLeft === 1 ? "" : "s"} left`;
-  const extraCost = Number(meta.extra_cost || 0);
   const dataPoints = Number(meta.data_points || 0);
 
   if (headline === "BUY") {
-    return `You are paying ${formatCurrency(extraCost)} more than the lowest price.\n${dayLabel} - waiting is risky.\nBased on ${dataPoints} days of price data.`;
+    return `You missed the lowest - waiting may not help much now.\n${dayLabel} - waiting is risky.\nBased on ${dataPoints} days of price data.`;
   }
 
   return `Price may drop further.\n${dayLabel} - waiting is safer.`;
+}
+
+function getPredictionDirection(prediction) {
+  if (!prediction) {
+    return "";
+  }
+
+  const expected = Number(prediction.expected || 0);
+  const min = Number(prediction.min || 0);
+  const max = Number(prediction.max || 0);
+  const midpoint = (min + max) / 2;
+  const rangeSize = Math.abs(max - min);
+  const drift = expected - midpoint;
+
+  if (rangeSize <= Math.max(20, expected * 0.0025)) {
+    return "Likely stable";
+  }
+
+  if (drift >= -5) {
+    return "Likely stable to slightly higher";
+  }
+
+  return "Likely stable to slightly lower";
 }
 
 function getDaysLeftCard(paymentWindow, paymentWarning) {
@@ -451,6 +473,8 @@ function renderDashboard() {
   const dropProbability = dashboard?.decision?.decision_meta?.drop_probability;
   const premiumPrediction = dashboard?.decision?.decision_meta?.premium_prediction;
   const isBuyDecision = decision.headline === "BUY";
+  const roundedDistanceFromLow = Math.round(Number(meta?.distance_from_low || 0));
+  const predictionDirection = getPredictionDirection(prediction);
   const daysLeft = getDaysLeftCard(dashboard.paymentWindow, dashboard.paymentWarning);
   const liveAvailable = live?.is_live_available === true;
 
@@ -529,20 +553,21 @@ function renderDashboard() {
             </p>
 
             <div class="impact-box">
-              <div class="impact-main">
-                <span>You are paying</span>
-                <strong>${escapeHtml(formatCurrency(meta?.distance_from_low || 0))} more</strong>
-              </div>
+              <strong>${escapeHtml(formatCurrency(roundedDistanceFromLow))} above the best price this cycle</strong>
             </div>
 
             ${
               prediction
                 ? `<div class="prediction-box">
                     <div class="prediction-main">
-                      <span>3-day price outlook</span>
+                      <span>Next 3 days (expected)</span>
                       <strong>
                         ${escapeHtml(formatCurrency(prediction.expected))}
                       </strong>
+                    </div>
+
+                    <div class="prediction-direction">
+                      ${escapeHtml(predictionDirection)}
                     </div>
 
                     <div class="prediction-range">
@@ -595,16 +620,18 @@ function renderDashboard() {
 
               <button class="primary-button full-width">
               ${
-                isBuyDecision || dashboard.decision?.decision_meta?.wait_risk === "HIGH"
-                  ? "Use this signal"
-                  : "Set reminder to buy"
+                isBuyDecision
+                  ? dashboard.decision?.decision_meta?.wait_risk === "HIGH"
+                    ? "Act now - timing is critical"
+                    : "Use this timing"
+                  : "Set reminder - price may drop"
               }
             </button>
             </div>
 
             <div class="premium-box">
-              <span>Save up to ${escapeHtml(formatCurrency(meta?.wait_scenario?.potential_saving ?? 0))}</span>
-              <strong>${premiumPrediction?.locked ? "🔒 See best day to buy" : "-"}</strong>
+              <span>🔒 Save up to ${escapeHtml(formatCurrency(Math.round(meta?.wait_scenario?.potential_saving ?? 0)))} more</span>
+              <strong>${premiumPrediction?.locked ? "See best day to buy" : "-"}</strong>
             </div>
           </div>
         </section>

@@ -279,7 +279,7 @@ p {
 }
 
 .prediction-box {
-  margin-top: 14px;
+  margin-top: 16px;
   padding: 14px;
   border-radius: 12px;
   background: rgba(255,255,255,0.05);
@@ -303,11 +303,18 @@ p {
   color: #9ca3af;
 }
 
+.prediction-direction {
+  margin-top: 6px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
 .impact-box {
-  margin-top: 14px;
+  margin-top: 16px;
   padding: 14px;
   border-radius: 12px;
   background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.16);
 }
 
 .impact-main {
@@ -321,10 +328,10 @@ p {
   color: var(--text-secondary);
 }
 
-.impact-main strong {
+.impact-box strong {
+  display: block;
   font-size: 22px;
   color: #fbbf24;
-  text-align: right;
 }
 
 .probability-box {
@@ -368,7 +375,7 @@ p {
 }
 
 .action-box {
-  margin-top: 16px;
+  margin-top: 18px;
 }
 
 .action-text {
