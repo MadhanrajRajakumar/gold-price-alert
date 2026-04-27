@@ -2,10 +2,8 @@
   "name": "gold-price-alert",
   "version": "1.0.0",
   "description": "Simple MVP for tracking daily gold prices and checking 30-day lows.",
-  "main": "src/server.js",
+  "main": "api/index.js",
   "scripts": {
-    "dev": "nodemon src/server.js",
-    "start": "node src/server.js",
     "build": "prisma generate",
     "postinstall": "prisma generate",
     "prisma:generate": "prisma generate"
