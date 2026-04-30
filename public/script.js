@@ -470,78 +470,190 @@ function renderDashboard() {
   const decision = getDecisionPresentation(dashboard);
   const meta = dashboard?.decision?.decision_meta;
   const prediction = dashboard?.decision?.decision_meta?.prediction_3d;
+  const dropProbability = dashboard?.decision?.decision_meta?.drop_probability;
+  const premiumPrediction = dashboard?.decision?.decision_meta?.premium_prediction;
   const isBuyDecision = decision.headline === "BUY";
   const roundedDistanceFromLow = Math.round(Number(meta?.distance_from_low || 0));
+const confidence = decision.confidence;
+let strength = "";
+if (confidence < 40) strength = "Weak";
+else if (confidence < 70) strength = "Moderate";
+else strength = "Strong";
   const predictionDirection = getPredictionDirection(prediction);
+  const daysLeft = getDaysLeftCard(dashboard.paymentWindow, dashboard.paymentWarning);
   const liveAvailable = live?.is_live_available === true;
 
   app.innerHTML = `
-    <main class="container">
-      <header class="header section">
-        <div>
-          <h1 class="header-title">Gold Price</h1>
-          <button class="header-dropdown">${escapeHtml(dashboard.user.city)} ▼</button>
-        </div>
-        <div class="header-actions">
-          <button id="refreshPriceBtn" class="icon-button">↻</button>
-          <button id="openSettings" class="icon-button">⚙</button>
-        </div>
-      </header>
+    <main class="screen">
+      <div class="shell">
+        <header class="topbar">
+          <div class="brand">
+            <p class="eyebrow">Gold Price Alert</p>
+            <h1 class="title">Should you buy today?</h1>
+            <p class="subtitle">${escapeHtml(
+              liveAvailable
+                ? `${dashboard.user.email} • ${dashboard.user.city} history`
+                : "Historical trend is still available while live pricing is offline",
+            )}</p>
+          </div>
+          <div class="row-between">
+            <button id="refreshPriceBtn" type="button" class="primary-button">Refresh Price</button>
+            <button id="openSettings" type="button" class="ghost-button">Settings</button>
+          </div>
+        </header>
 
-      <section class="hero-card card section">
-        <div class="huge-text">${escapeHtml(
-          liveAvailable
-            ? formatCurrency(live.price_per_gram)
-            : live?.live_error || "Unavailable",
-        )}</div>
-        ${
-          priceMetrics.delta !== null
-            ? `<div class="price-change-pill ${priceMetrics.className}">${escapeHtml(formatSignedCurrency(priceMetrics.delta))} today</div>`
-            : ""
-        }
-      </section>
+        <section class="card panel">
+          <div class="brand">
+            <div class="headline-price">
+              <strong>${escapeHtml(
+                liveAvailable
+                  ? formatCurrency(live.price_per_gram)
+                  : live?.live_error || "Live data unavailable",
+              )}</strong>
+              <span class="change-pill ${priceMetrics.className}">${
+                priceMetrics.delta === null
+                  ? escapeHtml(priceMetrics.label)
+                  : `${escapeHtml(formatSignedCurrency(priceMetrics.delta))} • ${escapeHtml(priceMetrics.label)}`
+              }</span>
+            </div>
+            <div class="footer-note">
+              ${
+                live.freshness_label
+                  ? `<span class="meta">${escapeHtml(live.freshness_label)}</span>`
+                  : '<span class="meta">Last updated unavailable</span>'
+              }
+              ${
+                live.delayed_message
+                  ? `<span class="badge warning">${escapeHtml(live.delayed_message)}</span>`
+                  : ""
+              }
+              ${
+                live.live_error
+                  ? `<span class="badge error">${escapeHtml(live.live_error)}</span>`
+                  : ""
+              }
+            </div>
+          </div>
+        </section>
 
-      <section class="decision-card card section">
-        <div class="decision-header">
-          <div class="decision-text">${escapeHtml(decision.headline)}</div>
-          ${
-            decision.buyType
-              ? `<div class="decision-tag">${escapeHtml(decision.buyType)}</div>`
-              : ""
-          }
-        </div>
-        <div class="supporting-text">
-          ${escapeHtml(isBuyDecision ? "You're late — waiting won't help much." : getDecisionSupport(dashboard))}
-        </div>
-        <div class="impact-box">
-          <div class="impact-text">${escapeHtml(formatCurrency(roundedDistanceFromLow))} above the lowest price this cycle</div>
-          <div class="supporting-text">You've already missed the lowest point.</div>
-        </div>
-      </section>
+        <section class="card decision-card panel ${decision.tone}">
+          <div class="decision-top">
+            <div class="decision-main">
+              <h2 class="decision-title">${escapeHtml(decision.headline)}</h2>
+              ${
+                decision.buyType
+                  ? `<span class="decision-tag ${escapeHtml(decision.buyType.toLowerCase())}">${escapeHtml(decision.buyType)}</span>`
+                  : ""
+              }
+            </div>
+            <div class="confidence-ring">
+              <span>${escapeHtml(strength)}</span>
+              <small>${escapeHtml(confidence)}%</small>
+            </div>
+          </div>
 
-      ${
-        prediction
-          ? `<section class="prediction-card card section">
-              <div class="supporting-text">Next 3 days</div>
-              <div class="supporting-text" style="color: var(--text)">${escapeHtml(predictionDirection)}</div>
-              <div class="supporting-text" style="font-size:12px;">Based on recent price movement</div>
-              <div class="prediction-range">${escapeHtml(formatCurrency(prediction.min))} — ${escapeHtml(formatCurrency(prediction.max))}</div>
-            </section>`
-          : ""
-      }
+          <div class="decision-body">
+            <p class="decision-message ${isBuyDecision ? "buy-state" : "wait-state"}">
+              ${escapeHtml(getDecisionSupport(dashboard))}
+            </p>
 
-      <section class="premium-block section">
-        <div class="premium-title">🔒 Find the best day to buy</div>
-        <div class="premium-subtitle">Avoid overpaying like today</div>
-      </section>
+            <div class="impact-box">
+              <strong>${escapeHtml(formatCurrency(roundedDistanceFromLow))} above the lowest price this cycle</strong>
+            </div>
+            <p class="loss-framing">You’ve already missed the lowest price this cycle.</p>
 
-      <button class="cta-button">Act now — timing is critical</button>
-      
+            ${
+              prediction
+                ? `<div class="prediction-box">
+                    <div class="prediction-main">
+                      <span>3-day price outlook</span>
+                      <strong>
+                        ${escapeHtml(formatCurrency(prediction.expected))}
+                      </strong>
+                    </div>
+
+                    <div class="prediction-direction">
+                      ${escapeHtml(predictionDirection)}
+                      <div class="prediction-anchor">Based on recent price movement</div>
+                    </div>
+
+                    <div class="prediction-range">
+                      Range: ${escapeHtml(formatCurrency(prediction.min))} - ${escapeHtml(formatCurrency(prediction.max))}
+                    </div>
+                  </div>`
+                : ""
+            }
+
+            <div class="decision-actions">
+              <div class="premium-box">
+                <span>🔒 Find the best day to buy</span>
+                <strong>Avoid overpaying like today</strong>
+              </div>
+              
+              <div class="action-box">
+                <button class="primary-button full-width">
+                  ${isBuyDecision ? "Use this signal" : "Set reminder to buy"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="card chart-card">
+          <div class="chart-header">
+            <div>
+              <p class="eyebrow">Trend</p>
+              <h3>Price trend</h3>
+            </div>
+            <div class="range-selector">
+              ${["1W", "1M", "3M", "6M", "1Y"]
+                .map(
+                  (range) =>
+                    `<button type="button" class="range-button ${
+                      state.selectedRange === range ? "active" : ""
+                    }" data-range="${range}">${range}</button>`,
+                )
+                .join("")}
+            </div>
+          </div>
+          <div class="chart-wrap">
+            <canvas id="goldChart" aria-label="Gold price chart"></canvas>
+          </div>
+          <p class="meta" id="chartMeta"></p>
+        </section>
+
+        <section class="stats-grid">
+          <article class="card stat-card panel">
+            <p class="stat-label">Lowest price this cycle</p>
+            <div class="stat-value">${escapeHtml(formatCurrency(dashboard.chart.lowest?.price_per_gram))}</div>
+            <p class="meta">${escapeHtml(
+              dashboard.chart.lowest ? formatDateLabel(dashboard.chart.lowest.date) : "No data",
+            )}</p>
+          </article>
+
+          <article class="card stat-card panel">
+            <p class="stat-label">Cycle high</p>
+            <div class="stat-value">${escapeHtml(formatCurrency(dashboard.chart.highest?.price_per_gram))}</div>
+            <p class="meta">${escapeHtml(
+              dashboard.chart.highest ? formatDateLabel(dashboard.chart.highest.date) : "No data",
+            )}</p>
+          </article>
+
+          <article class="card stat-card panel">
+            <p class="stat-label">Days left</p>
+            <div class="stat-value">${escapeHtml(daysLeft.value)}</div>
+            <p class="meta">${escapeHtml(daysLeft.meta)}</p>
+          </article>
+        </section>
+
+        ${buildFlashHtml(state.flashMessage, state.flashType)}
+      </div>
       ${state.settingsOpen ? getSettingsHtml(dashboard) : ""}
     </main>
   `;
 
   attachDashboardEvents();
+  renderChart();
 }
 
 
