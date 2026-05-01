@@ -15,25 +15,24 @@ enum AlertType {
 }
 
 model User {
-  id                     Int           @id @default(autoincrement())
-  email                  String        @unique
-  city                   String        @default("Chennai")
-  telegram_chat_id       String?
-  telegram_verified      Boolean       @default(false)
-  last_payment_date      DateTime?
-  last_alert_sent_at     DateTime?
-  onboarding_completed_at DateTime?
-  alert_preferences      Json          @default("{\"daily\":true,\"lowest\":true,\"deadline\":true}")
+  id                           Int           @id @default(autoincrement())
+  email                        String        @unique
+  city                         String        @default("Chennai")
+  telegram_chat_id             String?
+  telegram_verified            Boolean       @default(false)
+  last_payment_date            DateTime?
+  last_alert_sent_at           DateTime?
+  onboarding_completed_at      DateTime?
+  alert_preferences            Json          @default("{\"daily\":true,\"lowest\":true,\"deadline\":true}")
   telegram_messages_sent_today Int           @default(0)
-  last_message_date      DateTime?       @db.Date
-  alert_enabled          Boolean         @default(true)
-  alert_time             String          @default("09:00")
-  analysis_days          Int             @default(30)
-  created_at             DateTime        @default(now())
-  goldPrices             GoldPrice[]
-  alertLogs              AlertLog[]
-  activityLogs           ActivityLog[]
-  sessions               Session[]
+  last_message_date            DateTime?     @db.Date
+  alert_enabled                Boolean       @default(true)
+  alert_time                   String        @default("09:00")
+  analysis_days                Int           @default(30)
+  created_at                   DateTime      @default(now())
+  alertLogs                    AlertLog[]
+  activityLogs                 ActivityLog[]
+  sessions                     Session[]
 }
 
 model Session {
@@ -46,21 +45,44 @@ model Session {
 }
 
 model GoldPrice {
-  id              Int      @id @default(autoincrement())
-  date            DateTime
-  price_per_gram  Float
-  min_price       Float?
-  max_price       Float?
-  confidence      Int?
-  city            String   @default("Chennai")
-  source          String   @default("system")
-  source_summary  Json?
-  fetched_at      DateTime @default(now())
-  manual_override Boolean  @default(false)
-  user_id         Int
-  user            User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  id           Int      @id @default(autoincrement())
+  timestamp    DateTime @unique
+  pricePerGram Float    @map("price_per_gram")
+  source       String
+  createdAt    DateTime @default(now()) @map("created_at")
 
-  @@unique([user_id, date, city])
+  @@index([timestamp])
+  @@map("gold_prices")
+}
+
+model DailySummary {
+  id               Int      @id @default(autoincrement())
+  date             DateTime @unique @db.Date
+  openPrice        Float    @map("open_price")
+  highPrice        Float    @map("high_price")
+  lowPrice         Float    @map("low_price")
+  closePrice       Float    @map("close_price")
+  source           String   @default("aggregation")
+  validatedAt      DateTime? @map("validated_at")
+  validationStatus String   @default("pending") @map("validation_status")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  @@index([date])
+  @@map("daily_summary")
+}
+
+model SystemJobRun {
+  id              Int      @id @default(autoincrement())
+  jobName         String   @unique @map("job_name")
+  lastStartedAt   DateTime? @map("last_started_at")
+  lastCompletedAt DateTime? @map("last_completed_at")
+  status          String   @default("idle")
+  metadata        Json?
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@map("system_job_runs")
 }
 
 model AlertLog {

@@ -9,14 +9,10 @@ const {
   getRecentActivity,
   getTrendData,
   saveManualPrice,
-  serializeStoredPrice,
-  startOfDay,
-  storeDailyGoldPrice,
   updateAlertSettings,
   updateUserCity,
   updateUserPaymentDate,
 } = require("../services/goldPriceService");
-const { verifyTelegramConnection } = require("../services/telegramService");
 
 const router = express.Router();
 
@@ -29,30 +25,31 @@ router.get("/latest-price", async (request, response, next) => {
   }
 });
 
-router.post("/prices/fetch", async (request, response, next) => {
+router.get("/prices", async (request, response, next) => {
   try {
-    const saved = await storeDailyGoldPrice(request.user.id, request.user.city);
-    const summary = await getDashboardSummary(
-      request.user.id,
-      new Date(),
-      DEFAULT_RANGE,
-    );
-
-    response.status(201).json({
-      message: saved ? "Daily gold price stored" : "Live gold price unavailable",
-      price: saved ? serializeStoredPrice(saved) : null,
-      decision: summary.decision,
-      dashboard: summary,
-    });
+    const range = request.query.range || DEFAULT_RANGE;
+    const payload = await getTrendData(request.user.id, request.user.city, range);
+    response.json(payload);
   } catch (error) {
     next(error);
   }
 });
 
-router.get("/prices", async (request, response, next) => {
+router.post("/prices/fetch", async (request, response, next) => {
   try {
-    const prices = await getLast30DaysPrices(request.user.id, request.user.city);
-    response.json(prices);
+    const latest = await fetchLatestGoldPrice(request.user.id, request.user.city);
+    const summary = await getDashboardSummary(
+      request.user.id,
+      new Date(),
+      request.query.range || DEFAULT_RANGE,
+    );
+
+    response.json({
+      message: "Prices are served from stored market data only",
+      price: latest.is_live_available ? latest : null,
+      decision: summary.decision,
+      dashboard: summary,
+    });
   } catch (error) {
     next(error);
   }
@@ -78,6 +75,15 @@ router.get("/trends", async (request, response, next) => {
   }
 });
 
+router.get("/prices/last-30-days", async (request, response, next) => {
+  try {
+    const prices = await getLast30DaysPrices(request.user.id, request.user.city);
+    response.json(prices);
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.get("/activity", async (request, response, next) => {
   try {
     const items = await getRecentActivity(request.user.id);
@@ -96,20 +102,16 @@ router.get("/activity", async (request, response, next) => {
 
 router.post("/manual-price", async (request, response, next) => {
   try {
-    const saved = await saveManualPrice(
+    await saveManualPrice(
       request.user.id,
       request.user.city,
       request.body.price_per_gram,
     );
-    const summary = await getDashboardSummary(request.user.id);
-
-    response.status(201).json({
-      message: "Manual price saved for today",
-      price: serializeStoredPrice(saved),
-      dashboard: summary,
+    response.status(410).json({
+      error: "Manual market price overrides are no longer supported",
     });
   } catch (error) {
-    error.statusCode = 400;
+    error.statusCode = error.statusCode || 410;
     next(error);
   }
 });
@@ -156,7 +158,11 @@ router.post("/city", async (request, response, next) => {
 
 router.post("/alert-settings", async (request, response, next) => {
   try {
-    await updateAlertSettings(request.user.id, request.body.alert_time, request.body.analysis_days);
+    await updateAlertSettings(
+      request.user.id,
+      request.body.alert_time,
+      request.body.analysis_days,
+    );
     const summary = await getDashboardSummary(request.user.id);
 
     response.status(201).json({
@@ -183,7 +189,5 @@ router.post("/onboarding/complete", async (request, response, next) => {
     next(error);
   }
 });
-
-
 
 module.exports = router;

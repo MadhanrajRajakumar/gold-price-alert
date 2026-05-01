@@ -1,94 +1,140 @@
 const cron = require("node-cron");
+const { validateEnv } = require("../config/env");
+const {
+  aggregateDailySummary,
+  backfillHistory,
+  ingestRealtimeSnapshot,
+  getLatestStoredPrice,
+  startOfDay,
+  validateDailySummary,
+} = require("./marketDataService");
 const {
   ALERT_TIMEZONE,
   getNextTriggerTime,
   processAlertsForAllUsers,
 } = require("./goldPriceService");
 
-const prisma = require("../lib/prisma");
+async function runRealtimeIngestionJob() {
+  const snapshot = await ingestRealtimeSnapshot();
+  console.log("[gold-price-alert] stored realtime gold snapshot", {
+    timestamp: snapshot.timestamp,
+    spot_24k_inr_per_gram: snapshot.spot_24k_inr_per_gram,
+    retail_22k_inr_per_gram_estimate: snapshot.retail_22k_inr_per_gram_estimate,
+  });
+  return snapshot;
+}
+
+async function runDailyAggregationJob(referenceDate = new Date()) {
+  const targetDate = new Date(
+    startOfDay(referenceDate).getTime() - 24 * 60 * 60 * 1000,
+  );
+  return aggregateDailySummary(targetDate);
+}
+
+async function runDailyValidationJob(referenceDate = new Date()) {
+  const targetDate = new Date(
+    startOfDay(referenceDate).getTime() - 24 * 60 * 60 * 1000,
+  );
+  return validateDailySummary(targetDate);
+}
 
 async function runDailyPriceJob() {
-  const { processAlertsForAllUsers, ALERT_TIMEZONE } = require("./goldPriceService");
   const now = new Date();
   const timeString = now.toLocaleTimeString("en-US", {
     timeZone: ALERT_TIMEZONE,
     hour12: false,
     hour: "2-digit",
-    minute: "2-digit"
+    minute: "2-digit",
   });
 
   const results = await processAlertsForAllUsers(now, timeString);
 
   if (results.length > 0) {
-    console.log(`[gold-price-alert] processed daily checks for ${results.length} user(s) at ${timeString}`);
+    console.log(
+      `[gold-price-alert] processed alert checks for ${results.length} user(s) at ${timeString}`,
+    );
   }
 
   return results;
 }
 
-async function sendDailyTelegramAlerts() {
-  const { buildGoldAlert, ALERT_TIMEZONE } = require("./goldPriceService");
-  const { sendTelegramMessage } = require("./telegramService");
+async function primeMarketData() {
+  const latest = await getLatestStoredPrice();
 
-  const now = new Date();
-  const timeString = now.toLocaleTimeString("en-US", {
-    timeZone: ALERT_TIMEZONE,
-    hour12: false,
-    hour: "2-digit",
-    minute: "2-digit"
-  });
-
-  const users = await prisma.user.findMany({
-    where: {
-      telegram_verified: true,
-      alert_enabled: true,
-      alert_time: timeString
-    }
-  });
-
-  let sentCount = 0;
-  for (const user of users) {
-    if (user.telegram_chat_id) {
-      try {
-        const alertMessage = await buildGoldAlert(user.id);
-        await sendTelegramMessage(user.telegram_chat_id, alertMessage);
-        sentCount++;
-      } catch (e) {
-        console.error(`[gold-price-alert] Failed to send to ${user.id}: ${e}`);
-      }
-    }
-  }
-  
-  if (sentCount > 0) {
-    console.log(`[gold-price-alert] Daily Telegram alerts sent to ${sentCount} user(s) at ${timeString}`);
+  if (!latest) {
+    await backfillHistory();
   }
 }
 
 function startScheduler() {
-  // We enforce minute-by-minute evaluation because users can have custom alert times.
-  const cronSchedule = "* * * * *";
+  const env = validateEnv();
+
+  if (!env.schedulerEnabled) {
+    console.log("[gold-price-alert] Scheduler disabled by GOLD_API_SCHEDULER_ENABLED");
+    return;
+  }
+
   cron.schedule(
-    cronSchedule,
+    "*/30 * * * *",
+    async () => {
+      try {
+        await runRealtimeIngestionJob();
+      } catch (error) {
+        console.error("[gold-price-alert] Realtime ingestion job failed:", error);
+      }
+    },
+    { timezone: ALERT_TIMEZONE },
+  );
+
+  cron.schedule(
+    "5 0 * * *",
+    async () => {
+      try {
+        await runDailyAggregationJob();
+      } catch (error) {
+        console.error("[gold-price-alert] Daily aggregation job failed:", error);
+      }
+    },
+    { timezone: ALERT_TIMEZONE },
+  );
+
+  cron.schedule(
+    "20 0 * * *",
+    async () => {
+      try {
+        await runDailyValidationJob();
+      } catch (error) {
+        console.error("[gold-price-alert] Daily validation job failed:", error);
+      }
+    },
+    { timezone: ALERT_TIMEZONE },
+  );
+
+  cron.schedule(
+    "* * * * *",
     async () => {
       try {
         await runDailyPriceJob();
-        await sendDailyTelegramAlerts();
       } catch (error) {
-        console.error("[gold-price-alert] Daily job failed:", error);
+        console.error("[gold-price-alert] User alert job failed:", error);
       }
     },
-    {
-      timezone: ALERT_TIMEZONE,
-    },
+    { timezone: ALERT_TIMEZONE },
   );
 
+  primeMarketData().catch((error) => {
+    console.error("[gold-price-alert] Initial market data priming failed:", error);
+  });
+
   console.log(
-    `[gold-price-alert] Scheduler started with "${cronSchedule}" in ${ALERT_TIMEZONE}; next run ${getNextTriggerTime().toISOString()}`,
+    `[gold-price-alert] Scheduler started in ${ALERT_TIMEZONE}; next alert run ${getNextTriggerTime().toISOString()}`,
   );
 }
 
 module.exports = {
+  runDailyAggregationJob,
   runDailyPriceJob,
-  sendDailyTelegramAlerts,
+  runDailyValidationJob,
+  runRealtimeIngestionJob,
   startScheduler,
 };

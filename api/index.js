@@ -1,5 +1,6 @@
 if (process.env.NODE_ENV !== "production") {
-  require("dotenv").config();
+  const { loadEnv } = require("../src/config/loadEnv");
+  loadEnv();
 }
 
 const express = require('express');
@@ -25,6 +26,7 @@ app.use(express.static(path.join(__dirname, "..", "public")));
 app.use("/api/auth", authRoutes);
 app.use("/api", requireAuth, alertRoutes);
 app.use("/api/me", requireAuth, userRoutes);
+app.use("/api", requireAuth, userRoutes);
 
 app.get("/health", (_req, res) => {
   res.status(200).send("OK");

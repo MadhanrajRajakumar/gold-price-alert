@@ -130,10 +130,10 @@ function destroyChart() {
 }
 
 function getPriceChangeMetrics(dashboard) {
-  const livePrice = dashboard?.live_price?.price_per_gram;
+  const livePrice = dashboard?.live_price?.primary_price_inr_per_gram;
   const meta = dashboard?.decision?.decision_meta;
-  const lowestPrice = Number(meta?.lowest_price);
-  const highestPrice = Number(meta?.highest_price);
+  const lowestPrice = Number(meta?.lowest_retail_estimate);
+  const highestPrice = Number(meta?.highest_retail_estimate);
   const hasRange =
     Number.isFinite(lowestPrice) &&
     Number.isFinite(highestPrice) &&
@@ -144,15 +144,15 @@ function getPriceChangeMetrics(dashboard) {
     const delta = Number(livePrice) - midpoint;
     const className = delta < 0 ? "positive" : delta > 0 ? "negative" : "";
     const rangePosition = Number(meta?.range_position);
-    let label = "Within billing-cycle range";
+    let label = "Within estimated retail range";
 
     if (Number.isFinite(rangePosition)) {
       if (rangePosition <= 0.2) {
-        label = "Near billing-cycle low";
+        label = "Near estimated retail low";
       } else if (rangePosition >= 0.8) {
-        label = "Near billing-cycle high";
+        label = "Near estimated retail high";
       } else {
-        label = "Mid billing-cycle range";
+        label = "Mid estimated retail range";
       }
     }
 
@@ -161,7 +161,7 @@ function getPriceChangeMetrics(dashboard) {
 
   return {
     delta: null,
-    label: livePrice ? "Cycle range unavailable" : "No historical data available",
+    label: livePrice ? "Retail range unavailable" : "No historical data available",
     className: "",
   };
 }
@@ -197,7 +197,7 @@ function getDecisionPresentation(dashboard) {
 
 function getDecisionSupport(dashboard) {
   const live = dashboard?.live_price;
-  const hasLivePrice = Boolean(live?.price_per_gram);
+  const hasLivePrice = Boolean(live?.primary_price_inr_per_gram);
   const meta = dashboard?.decision?.decision_meta;
   const headline = getDecisionPresentation(dashboard).headline;
 
@@ -214,10 +214,10 @@ function getDecisionSupport(dashboard) {
   const dataPoints = Number(meta.data_points || 0);
 
   if (headline === "BUY") {
-    return `You missed the lowest - waiting may not help much now.\n${dayLabel} - waiting is risky.\nBased on ${dataPoints} days of price data.`;
+    return `You missed the recent spot low - waiting may not help much now.\n${dayLabel} - waiting is risky.\nBased on ${dataPoints} days of spot price data.`;
   }
 
-  return `Price may drop further.\n${dayLabel} - waiting is safer.`;
+  return `Spot price may drop further.\n${dayLabel} - waiting is safer.\nBased on ${dataPoints} days of spot price data.`;
 }
 
 function getPredictionDirection(prediction) {
@@ -482,6 +482,10 @@ else strength = "Strong";
   const predictionDirection = getPredictionDirection(prediction);
   const daysLeft = getDaysLeftCard(dashboard.paymentWindow, dashboard.paymentWarning);
   const liveAvailable = live?.is_live_available === true;
+  const secondaryPriceText =
+    liveAvailable && live.secondary_price_inr_per_gram
+      ? `${live.secondary_price_label || "Spot 24K"} ${formatCurrency(live.secondary_price_inr_per_gram)}`
+      : "";
 
   app.innerHTML = `
     <main class="screen">
@@ -507,7 +511,7 @@ else strength = "Strong";
             <div class="headline-price">
               <strong>${escapeHtml(
                 liveAvailable
-                  ? formatCurrency(live.price_per_gram)
+                  ? formatCurrency(live.primary_price_inr_per_gram)
                   : live?.live_error || "Live data unavailable",
               )}</strong>
               <span class="change-pill ${priceMetrics.className}">${
@@ -518,9 +522,19 @@ else strength = "Strong";
             </div>
             <div class="footer-note">
               ${
+                secondaryPriceText
+                  ? `<span class="meta">${escapeHtml(secondaryPriceText)}</span>`
+                  : ""
+              }
+              ${
                 live.freshness_label
                   ? `<span class="meta">${escapeHtml(live.freshness_label)}</span>`
                   : '<span class="meta">Last updated unavailable</span>'
+              }
+              ${
+                live.primary_price_label
+                  ? `<span class="badge">${escapeHtml(live.primary_price_label)}</span>`
+                  : ""
               }
               ${
                 live.delayed_message
@@ -558,15 +572,15 @@ else strength = "Strong";
             </p>
 
             <div class="impact-box">
-              <strong>${escapeHtml(formatCurrency(roundedDistanceFromLow))} above the lowest price this cycle</strong>
+              <strong>${escapeHtml(formatCurrency(roundedDistanceFromLow))} above the 30-day spot low</strong>
             </div>
-            <p class="loss-framing">You’ve already missed the lowest price this cycle.</p>
+            <p class="loss-framing">This recommendation is based on 24K spot history, not billed retail rates.</p>
 
             ${
               prediction
                 ? `<div class="prediction-box">
                     <div class="prediction-main">
-                      <span>3-day price outlook</span>
+                      <span>3-day retail estimate outlook</span>
                       <strong>
                         ${escapeHtml(formatCurrency(prediction.expected))}
                       </strong>
@@ -574,7 +588,7 @@ else strength = "Strong";
 
                     <div class="prediction-direction">
                       ${escapeHtml(predictionDirection)}
-                      <div class="prediction-anchor">Based on recent price movement</div>
+                      <div class="prediction-anchor">Derived from recent 24K spot movement</div>
                     </div>
 
                     <div class="prediction-range">
@@ -603,7 +617,7 @@ else strength = "Strong";
           <div class="chart-header">
             <div>
               <p class="eyebrow">Trend</p>
-              <h3>Price trend</h3>
+              <h3>24K spot trend</h3>
             </div>
             <div class="range-selector">
               ${["1W", "1M", "3M", "6M", "1Y"]
@@ -617,23 +631,23 @@ else strength = "Strong";
             </div>
           </div>
           <div class="chart-wrap">
-            <canvas id="goldChart" aria-label="Gold price chart"></canvas>
+            <canvas id="goldChart" aria-label="Gold spot price chart"></canvas>
           </div>
           <p class="meta" id="chartMeta"></p>
         </section>
 
         <section class="stats-grid">
           <article class="card stat-card panel">
-            <p class="stat-label">Lowest price this cycle</p>
-            <div class="stat-value">${escapeHtml(formatCurrency(dashboard.chart.lowest?.price_per_gram))}</div>
+            <p class="stat-label">30-day spot low</p>
+            <div class="stat-value">${escapeHtml(formatCurrency(dashboard.chart.lowest?.spot_24k_inr_per_gram))}</div>
             <p class="meta">${escapeHtml(
               dashboard.chart.lowest ? formatDateLabel(dashboard.chart.lowest.date) : "No data",
             )}</p>
           </article>
 
           <article class="card stat-card panel">
-            <p class="stat-label">Cycle high</p>
-            <div class="stat-value">${escapeHtml(formatCurrency(dashboard.chart.highest?.price_per_gram))}</div>
+            <p class="stat-label">30-day spot high</p>
+            <div class="stat-value">${escapeHtml(formatCurrency(dashboard.chart.highest?.spot_24k_inr_per_gram))}</div>
             <p class="meta">${escapeHtml(
               dashboard.chart.highest ? formatDateLabel(dashboard.chart.highest.date) : "No data",
             )}</p>
@@ -685,7 +699,7 @@ function renderChart() {
       labels: points.map((point) => formatDateLabel(point.date)),
       datasets: [
         {
-          data: points.map((point) => Number(point.price_per_gram)),
+          data: points.map((point) => Number(point.spot_24k_inr_per_gram)),
           borderColor: "#D4AF37",
           backgroundColor: gradient,
           tension: 0.4,
@@ -772,8 +786,8 @@ function renderChart() {
 
   if (chartMeta) {
     chartMeta.textContent = `Low ${formatCurrency(
-      state.dashboard.chart.lowest?.price_per_gram,
-    )} • High ${formatCurrency(state.dashboard.chart.highest?.price_per_gram)}`;
+      state.dashboard.chart.lowest?.spot_24k_inr_per_gram,
+    )} • High ${formatCurrency(state.dashboard.chart.highest?.spot_24k_inr_per_gram)} • Basis 24K spot`;
   }
 }
 

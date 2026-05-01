@@ -5,8 +5,11 @@
   "main": "api/index.js",
   "scripts": {
     "build": "prisma generate",
+    "backfill:gold": "node src/scripts/backfillGoldHistory.js",
     "postinstall": "prisma generate",
-    "prisma:generate": "prisma generate"
+    "prisma:generate": "prisma generate",
+    "prisma:validate": "prisma validate",
+    "test": "node --test"
   },
   "keywords": [],
   "author": "",

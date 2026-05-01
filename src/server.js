@@ -1,4 +1,5 @@
-require('dotenv').config();
+const { loadEnv } = require("./config/loadEnv");
+loadEnv();
 
 const express = require('express');
 const cors = require('cors');
@@ -24,6 +25,7 @@ app.use(express.static(path.join(__dirname, "..", "public")));
 app.use("/api/auth", authRoutes);
 app.use("/api", requireAuth, alertRoutes);
 app.use("/api/me", requireAuth, userRoutes);
+app.use("/api", requireAuth, userRoutes);
 
 app.get("/health", (_req, res) => {
   res.status(200).send("OK");
@@ -71,6 +73,3 @@ bootstrap().catch(async (error) => {
   await prisma.$disconnect();
   process.exit(1);
 });
-
-
-console.log("TOKEN CHECK:", process.env.TELEGRAM_BOT_TOKEN);
