@@ -2,8 +2,10 @@ const express = require("express");
 const { toLocalDateString } = require("../services/authService");
 const {
   completeOnboarding,
+  CYCLE_DAYS,
   DEFAULT_RANGE,
   fetchLatestGoldPrice,
+  getCycleInfo,
   getDashboardSummary,
   getLast30DaysPrices,
   getRecentActivity,
@@ -171,6 +173,34 @@ router.post("/alert-settings", async (request, response, next) => {
     });
   } catch (error) {
     error.statusCode = error.statusCode || 400;
+    next(error);
+  }
+});
+
+router.post("/mark-bought", async (request, response, next) => {
+  try {
+    const prisma = require("../lib/prisma");
+    const user = await prisma.user.update({
+      where: { id: request.user.id },
+      data: { last_payment_date: new Date() },
+    });
+
+    const cycleInfo = getCycleInfo(user.last_payment_date, new Date());
+
+    response.status(201).json({
+      success: true,
+      message: "Purchase recorded",
+      lastPurchaseDate: user.last_payment_date
+        ? toLocalDateString(user.last_payment_date)
+        : null,
+      nextCycleDate: cycleInfo.nextCycleDate
+        ? cycleInfo.nextCycleDate.toISOString().slice(0, 10)
+        : null,
+      daysRemaining: cycleInfo.daysRemaining,
+      status: cycleInfo.status,
+    });
+  } catch (error) {
+    error.statusCode = 400;
     next(error);
   }
 });

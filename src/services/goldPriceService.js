@@ -18,6 +18,7 @@ const {
 } = require("./marketDataService");
 
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
+const CYCLE_DAYS = 30;
 const ALERT_TIMEZONE = "Asia/Calcutta";
 const DEFAULT_CITY = "Chennai";
 const DEFAULT_RANGE = "30d";
@@ -86,12 +87,53 @@ function validateLastPaymentDate(date, referenceDate = new Date()) {
   return normalized;
 }
 
+/**
+ * Get cycle info for buy cycle tracking.
+ * last_payment_date is used as the user's last gold purchase date.
+ * @param {Date|null} lastPurchaseDate - Last gold purchase date (or null if never purchased)
+ * @param {Date} referenceDate - Reference date for calculations (default: today)
+ * @returns {{ status: string, nextCycleDate: Date|null, daysRemaining: number|null }}
+ *   - status: "never" (no purchase), "active" (within 30-day cycle), "available" (past cycle)
+ *   - nextCycleDate: When user can buy next (or null if never purchased)
+ *   - daysRemaining: Days until next cycle end (or null if never purchased)
+ */
+function getCycleInfo(lastPurchaseDate, referenceDate = new Date()) {
+  if (!lastPurchaseDate) {
+    return {
+      status: "never",
+      nextCycleDate: null,
+      daysRemaining: null,
+    };
+  }
+
+  const normalizedPurchaseDate = startOfDay(lastPurchaseDate);
+  const today = startOfDay(referenceDate);
+  
+  // Calculate next cycle: purchase date + 30 days
+  const nextCycleDate = new Date(normalizedPurchaseDate);
+  nextCycleDate.setUTCDate(nextCycleDate.getUTCDate() + CYCLE_DAYS);
+
+  const daysRemaining = Math.ceil(
+    (nextCycleDate.getTime() - today.getTime()) / DAY_IN_MS
+  );
+
+  const status = daysRemaining > 0 ? "active" : "available";
+
+  return {
+    status,
+    nextCycleDate,
+    daysRemaining,
+  };
+}
+
+// DEPRECATED: Use getCycleInfo() instead. Kept for backward compatibility.
 function getNextDueDate(lastPaymentDate) {
   const dueDate = startOfDay(lastPaymentDate);
   dueDate.setUTCMonth(dueDate.getUTCMonth() + 1);
   return dueDate;
 }
 
+// DEPRECATED: Use getCycleInfo() instead. Kept for backward compatibility.
 function getDaysLeft(lastPaymentDate, referenceDate = new Date()) {
   const today = startOfDay(referenceDate);
   const nextDueDate = getNextDueDate(lastPaymentDate);
@@ -306,14 +348,17 @@ async function buildDecision({ currentPrice, lastPaymentDate, referenceDate = ne
 }
 
 function getPaymentWindow(lastPaymentDate, referenceDate = new Date()) {
-  const nextDueDate = getNextDueDate(lastPaymentDate);
-  const daysLeft = getDaysLeft(lastPaymentDate, referenceDate);
+  const cycleInfo = getCycleInfo(lastPaymentDate, referenceDate);
+  
+  if (!cycleInfo.nextCycleDate) {
+    return null;
+  }
 
   return {
     lastPaymentDate: startOfDay(lastPaymentDate).toISOString().slice(0, 10),
-    nextDueDate: nextDueDate.toISOString().slice(0, 10),
-    daysLeft,
-    isOverdue: daysLeft < 0,
+    nextCycleDate: cycleInfo.nextCycleDate.toISOString().slice(0, 10),
+    daysLeft: cycleInfo.daysRemaining,
+    status: cycleInfo.status,
   };
 }
 
@@ -465,13 +510,19 @@ function buildAlertMessages(summary) {
     });
   }
 
-  if (summary.paymentWindow && summary.paymentWindow.daysLeft <= 3) {
+  if (summary.paymentWindow && summary.paymentWindow.daysLeft > 0 && summary.paymentWindow.daysLeft <= 3) {
     messages.push({
       type: "DEADLINE",
-      subject: "Gold Price Alert: Payment deadline approaching",
-      text: summary.paymentWindow.isOverdue
-        ? "Payment overdue"
-        : `Only ${summary.paymentWindow.daysLeft} days left to pay`,
+      subject: "Gold Price Alert: Buy cycle reminder",
+      text: `Only ${summary.paymentWindow.daysLeft} days until next buy cycle on ${summary.paymentWindow.nextCycleDate}`,
+    });
+  }
+
+  if (summary.paymentWindow && summary.paymentWindow.status === "available") {
+    messages.push({
+      type: "CYCLE_AVAILABLE",
+      subject: "Gold Price Alert: Buy cycle available",
+      text: "You can buy anytime now. Consider your budget and timing for the best purchase.",
     });
   }
 
@@ -489,7 +540,7 @@ function filterAlertMessagesByPreferences(messages, preferences) {
     if (message.type === "LOWEST") {
       return preferences.lowest;
     }
-    if (message.type === "DEADLINE") {
+    if (message.type === "DEADLINE" || message.type === "CYCLE_AVAILABLE") {
       return preferences.deadline;
     }
     if (message.type === "DAILY") {
@@ -726,6 +777,7 @@ Days left: ${daysLeft}`;
 
 module.exports = {
   ALERT_TIMEZONE,
+  CYCLE_DAYS,
   DEFAULT_CITY,
   DEFAULT_RANGE,
   SUPPORTED_CITIES,
@@ -735,6 +787,7 @@ module.exports = {
   completeOnboarding,
   fetchLatestGoldPrice,
   formatNextTriggerLabel,
+  getCycleInfo,
   getAlertHistory,
   getDashboardSummary,
   getLast30DaysPrices,

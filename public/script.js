@@ -98,6 +98,17 @@ function buildFlashHtml(message, type) {
   return `<p class="flash ${type || ""}">${escapeHtml(message || "")}</p>`;
 }
 
+function getRangeLabel(range) {
+  const rangeLabels = {
+    "1W": "1-week spot",
+    "1M": "1-month spot",
+    "3M": "3-month spot",
+    "6M": "6-month spot",
+    "1Y": "1-year spot",
+  };
+  return rangeLabels[range] || "spot";
+}
+
 async function requestJson(url, options) {
   const response = await fetch(url, {
     credentials: "same-origin",
@@ -182,9 +193,6 @@ function getDecisionPresentation(dashboard) {
   if (lower.includes("buy") || lower.includes("pay")) {
     headline = "BUY";
     tone = "buy";
-  } else if (lower.includes("overdue")) {
-    headline = "ACT NOW";
-    tone = "overdue";
   }
 
   return {
@@ -246,21 +254,37 @@ function getPredictionDirection(prediction) {
 function getDaysLeftCard(paymentWindow, paymentWarning) {
   if (!paymentWindow) {
     return {
-      value: "Not set",
-      meta: paymentWarning || "Add your last payment date in settings",
+      value: "Start",
+      meta: "Start your first buy cycle",
     };
   }
 
-  if (paymentWindow.isOverdue) {
+  if (paymentWindow.status === "never") {
     return {
-      value: "Overdue",
-      meta: `Due ${formatDateLabel(paymentWindow.nextDueDate)}`,
+      value: "Start",
+      meta: "Start your first buy cycle",
     };
   }
 
+  if (paymentWindow.status === "active") {
+    const daysText = paymentWindow.daysLeft === 1 ? "day" : "days";
+    return {
+      value: String(paymentWindow.daysLeft),
+      meta: `Next buy in ${paymentWindow.daysLeft} ${daysText}`,
+    };
+  }
+
+  if (paymentWindow.status === "available") {
+    return {
+      value: "Ready",
+      meta: "You can buy anytime now",
+    };
+  }
+
+  // Default fallback
   return {
-    value: String(paymentWindow.daysLeft),
-    meta: `Due ${formatDateLabel(paymentWindow.nextDueDate)}`,
+    value: "Not set",
+    meta: paymentWarning || "Add your last payment date in settings",
   };
 }
 
@@ -638,7 +662,7 @@ else strength = "Strong";
 
         <section class="stats-grid">
           <article class="card stat-card panel">
-            <p class="stat-label">30-day spot low</p>
+            <p class="stat-label">${getRangeLabel(state.selectedRange)} low</p>
             <div class="stat-value">${escapeHtml(formatCurrency(dashboard.chart.lowest?.spot_24k_inr_per_gram))}</div>
             <p class="meta">${escapeHtml(
               dashboard.chart.lowest ? formatDateLabel(dashboard.chart.lowest.date) : "No data",
@@ -646,7 +670,7 @@ else strength = "Strong";
           </article>
 
           <article class="card stat-card panel">
-            <p class="stat-label">30-day spot high</p>
+            <p class="stat-label">${getRangeLabel(state.selectedRange)} high</p>
             <div class="stat-value">${escapeHtml(formatCurrency(dashboard.chart.highest?.spot_24k_inr_per_gram))}</div>
             <p class="meta">${escapeHtml(
               dashboard.chart.highest ? formatDateLabel(dashboard.chart.highest.date) : "No data",
@@ -657,6 +681,17 @@ else strength = "Strong";
             <p class="stat-label">Days left</p>
             <div class="stat-value">${escapeHtml(daysLeft.value)}</div>
             <p class="meta">${escapeHtml(daysLeft.meta)}</p>
+          </article>
+
+          <article class="card stat-card panel">
+            <p class="stat-label">Buy Cycle</p>
+            <div class="cycle-info">
+              ${dashboard.paymentWindow?.lastPaymentDate ? `<p class="info-line">Last purchased: ${escapeHtml(formatDateLabel(dashboard.paymentWindow.lastPaymentDate))}</p>` : `<p class="info-line">Not yet purchased</p>`}
+              ${dashboard.paymentWindow?.nextCycleDate ? `<p class="info-line">Next available: ${escapeHtml(formatDateLabel(dashboard.paymentWindow.nextCycleDate))}</p>` : `<p class="info-line">Next available: Anytime</p>`}
+            </div>
+            <button id="markBoughtBtn" class="button button-primary" style="margin-top: 12px; width: 100%; cursor: pointer;">
+              Mark as bought
+            </button>
           </article>
         </section>
 
@@ -795,6 +830,11 @@ function attachDashboardEvents() {
   const refresh = document.getElementById("refreshPriceBtn");
   if (refresh) {
     refresh.addEventListener("click", refreshPrice);
+  }
+
+  const markBought = document.getElementById("markBoughtBtn");
+  if (markBought) {
+    markBought.addEventListener("click", markAsBought);
   }
 
   const openSettings = document.getElementById("openSettings");
@@ -982,6 +1022,42 @@ async function refreshPrice() {
   }
 }
 
+async function markAsBought() {
+  const button = document.getElementById("markBoughtBtn");
+  if (!button) {
+    return;
+  }
+
+  const originalText = button.textContent;
+  button.disabled = true;
+  button.textContent = "Recording..."; 
+
+  try {
+    const response = await requestJson("/api/mark-bought", {
+      method: "POST",
+    });
+
+    if (!response.success) {
+      throw new Error(response.error || "Failed to record purchase");
+    }
+
+    state.flashMessage = "Purchase recorded! Next cycle: " + response.nextCycleDate;
+    state.flashType = "success";
+    await loadDashboard(state.selectedRange);
+    renderApp();
+  } catch (error) {
+    console.error("MARK BOUGHT ERROR:", error);
+    state.flashMessage = error.message || "Failed to record purchase";
+    state.flashType = "error";
+    renderApp();
+  } finally {
+    const nextButton = document.getElementById("markBoughtBtn");
+    if (nextButton) {
+      nextButton.disabled = false;
+      nextButton.textContent = originalText;
+    }
+  }
+}
 
 async function handlePaymentDateSubmit(event) {
   event.preventDefault();
