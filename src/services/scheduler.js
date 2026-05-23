@@ -19,7 +19,8 @@ async function runRealtimeIngestionJob() {
   console.log("[gold-price-alert] stored realtime gold snapshot", {
     timestamp: snapshot.timestamp,
     spot_24k_inr_per_gram: snapshot.spot_24k_inr_per_gram,
-    retail_22k_inr_per_gram_estimate: snapshot.retail_22k_inr_per_gram_estimate,
+    retail_22k_inr_per_gram: snapshot.retail_22k_inr_per_gram,
+    retail_price_source: snapshot.retail_price_source,
   });
   return snapshot;
 }

@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 
 const {
   estimateRetail22KFromSpot24K,
+  modelRetail24KFromSpot24K,
   normalizeApiTimestamp,
   spotPerOunceToInrPerGram,
 } = require("./goldApiClient");
@@ -19,10 +20,16 @@ test("converts history-style ounce values with exchange rate into INR per gram",
   assert.equal(spot24kInrPerGram, 14155.72);
 });
 
-test("estimates retail 22K price from 24K spot with flat premium", () => {
-  const retail22kEstimate = estimateRetail22KFromSpot24K(13942.54, 1200);
+test("models retail 24K price from spot with multiplier", () => {
+  const retail24k = modelRetail24KFromSpot24K(13942.54, 1.155);
 
-  assert.equal(retail22kEstimate, 13980.66);
+  assert.equal(retail24k, 16103.63);
+});
+
+test("estimates retail 22K price from 24K spot with multiplier", () => {
+  const retail22kEstimate = estimateRetail22KFromSpot24K(13942.54, 1.155);
+
+  assert.equal(retail22kEstimate, 14761.66);
 });
 
 test("parses day-based history timestamps", () => {

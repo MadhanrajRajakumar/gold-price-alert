@@ -45,11 +45,14 @@ model Session {
 }
 
 model GoldPrice {
-  id           Int      @id @default(autoincrement())
-  timestamp    DateTime @unique
-  pricePerGram Float    @map("price_per_gram")
-  source       String
-  createdAt    DateTime @default(now()) @map("created_at")
+  id                  Int      @id @default(autoincrement())
+  timestamp           DateTime @unique
+  pricePerGram        Float    @map("price_per_gram")
+  retail24kPricePerGram Float? @map("retail_24k_price_per_gram")
+  retail22kPricePerGram Float? @map("retail_22k_price_per_gram")
+  retailPriceSource   String   @default("modeled_spot_multiplier") @map("retail_price_source")
+  source              String
+  createdAt           DateTime @default(now()) @map("created_at")
 
   @@index([timestamp])
   @@map("gold_prices")

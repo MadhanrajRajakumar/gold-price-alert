@@ -4,6 +4,7 @@ const {
   fetchHistoryRange,
   fetchOhlcRange,
   fetchRealtimePrice,
+  modelRetail24KFromSpot24K,
 } = require("./goldApiClient");
 
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
@@ -67,9 +68,16 @@ function serializeGoldPrice(row) {
   }
 
   const spot24kInrPerGram = Number(row.pricePerGram.toFixed(2));
-  const retail22kInrPerGramEstimate = estimateRetail22KFromSpot24K(
-    spot24kInrPerGram,
+  const retail24kInrPerGram = Number(
+    (row.retail24kPricePerGram ?? modelRetail24KFromSpot24K(spot24kInrPerGram)).toFixed(2),
   );
+  const retail22kInrPerGram = Number(
+    (
+      row.retail22kPricePerGram ??
+      estimateRetail22KFromSpot24K(spot24kInrPerGram)
+    ).toFixed(2),
+  );
+  const retailPriceSource = row.retailPriceSource || "modeled_spot_multiplier";
 
   return {
     id: row.id,
@@ -77,7 +85,11 @@ function serializeGoldPrice(row) {
     timestamp: row.timestamp.toISOString(),
     price_basis: "spot_24k_inr_per_gram",
     spot_24k_inr_per_gram: spot24kInrPerGram,
-    retail_22k_inr_per_gram_estimate: retail22kInrPerGramEstimate,
+    retail_24k_inr_per_gram: retail24kInrPerGram,
+    retail_22k_inr_per_gram: retail22kInrPerGram,
+    retail_22k_inr_per_gram_estimate: retail22kInrPerGram,
+    retail_price_source: retailPriceSource,
+    retail_price_is_modeled: retailPriceSource === "modeled_spot_multiplier",
     source: row.source,
     created_at: row.createdAt.toISOString(),
   };
@@ -125,11 +137,17 @@ async function storeRealtimeSnapshot(snapshot) {
     },
     update: {
       pricePerGram: snapshot.spot24kInrPerGram,
+      retail24kPricePerGram: snapshot.retail24kInrPerGram ?? null,
+      retail22kPricePerGram: snapshot.retail22kInrPerGram ?? null,
+      retailPriceSource: snapshot.retailPriceSource || "modeled_spot_multiplier",
       source: snapshot.source,
     },
     create: {
       timestamp: snapshot.timestamp,
       pricePerGram: snapshot.spot24kInrPerGram,
+      retail24kPricePerGram: snapshot.retail24kInrPerGram ?? null,
+      retail22kPricePerGram: snapshot.retail22kInrPerGram ?? null,
+      retailPriceSource: snapshot.retailPriceSource || "modeled_spot_multiplier",
       source: snapshot.source,
     },
   });
@@ -418,11 +436,17 @@ async function backfillHistory({ startDate, endDate, force = false } = {}) {
       },
       update: {
         pricePerGram: row.spot24kInrPerGram,
+        retail24kPricePerGram: row.retail24kInrPerGram ?? null,
+        retail22kPricePerGram: row.retail22kInrPerGram ?? null,
+        retailPriceSource: row.retailPriceSource || "modeled_spot_multiplier",
         source: row.source,
       },
       create: {
         timestamp: row.timestamp,
         pricePerGram: row.spot24kInrPerGram,
+        retail24kPricePerGram: row.retail24kInrPerGram ?? null,
+        retail22kPricePerGram: row.retail22kInrPerGram ?? null,
+        retailPriceSource: row.retailPriceSource || "modeled_spot_multiplier",
         source: row.source,
       },
     });

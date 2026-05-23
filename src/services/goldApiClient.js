@@ -19,16 +19,26 @@ function spotPerOunceToInrPerGram(pricePerOunce, exchangeRate = 1) {
   return ounceToGram(Number(pricePerOunce) * Number(exchangeRate));
 }
 
-function getRetailPremiumInrPerGram() {
-  return validateEnv().retailPremiumInrPerGram;
+function getRetailSpotMultiplier() {
+  return validateEnv().retailSpotMultiplier;
+}
+
+function modelRetail24KFromSpot24K(
+  spot24kInrPerGram,
+  retailSpotMultiplier = getRetailSpotMultiplier(),
+) {
+  return roundPrice(
+    Number(spot24kInrPerGram) * Number(retailSpotMultiplier),
+  );
 }
 
 function estimateRetail22KFromSpot24K(
   spot24kInrPerGram,
-  premiumInrPerGram = getRetailPremiumInrPerGram(),
+  retailSpotMultiplier = getRetailSpotMultiplier(),
 ) {
   return roundPrice(
-    Number(spot24kInrPerGram) * RETAIL_PURITY_RATIO + Number(premiumInrPerGram),
+    modelRetail24KFromSpot24K(spot24kInrPerGram, retailSpotMultiplier) *
+      RETAIL_PURITY_RATIO,
   );
 }
 
@@ -62,13 +72,18 @@ function buildNormalizedSpotPrice({
   raw = null,
 }) {
   const normalizedSpot = roundPrice(spot24kInrPerGram);
+  const normalizedRetail24k = modelRetail24KFromSpot24K(normalizedSpot);
+  const normalizedRetail22k = estimateRetail22KFromSpot24K(normalizedSpot);
 
   return {
     timestamp,
     source,
     exchangeRate: exchangeRate === null ? null : Number(exchangeRate),
     spot24kInrPerGram: normalizedSpot,
-    retail22kInrPerGramEstimate: estimateRetail22KFromSpot24K(normalizedSpot),
+    retail24kInrPerGram: normalizedRetail24k,
+    retail22kInrPerGram: normalizedRetail22k,
+    retail22kInrPerGramEstimate: normalizedRetail22k,
+    retailPriceSource: "modeled_spot_multiplier",
     raw,
   };
 }
@@ -274,10 +289,12 @@ module.exports = {
   buildNormalizedHistoryPoint,
   buildNormalizedSpotPrice,
   estimateRetail22KFromSpot24K,
+  getRetailSpotMultiplier,
   fetchHistoryRange,
   fetchOhlcRange,
   fetchRealtimePrice,
   fetchSpotReferenceQuote,
+  modelRetail24KFromSpot24K,
   normalizeApiTimestamp,
   ounceToGram,
   spotPerOunceToInrPerGram,

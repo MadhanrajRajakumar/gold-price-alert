@@ -16,7 +16,7 @@ function loadEnv() {
     const filePath = path.join(rootDir, fileName);
 
     if (fs.existsSync(filePath)) {
-      dotenv.config({ path: filePath });
+      dotenv.config({ path: filePath, override: true });
     }
   }
 

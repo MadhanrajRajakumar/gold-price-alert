@@ -155,15 +155,15 @@ function getPriceChangeMetrics(dashboard) {
     const delta = Number(livePrice) - midpoint;
     const className = delta < 0 ? "positive" : delta > 0 ? "negative" : "";
     const rangePosition = Number(meta?.range_position);
-    let label = "Within estimated retail range";
+    let label = "Within retail range";
 
     if (Number.isFinite(rangePosition)) {
       if (rangePosition <= 0.2) {
-        label = "Near estimated retail low";
+        label = "Near retail low";
       } else if (rangePosition >= 0.8) {
-        label = "Near estimated retail high";
+        label = "Near retail high";
       } else {
-        label = "Mid estimated retail range";
+        label = "Mid retail range";
       }
     }
 
@@ -598,13 +598,17 @@ else strength = "Strong";
             <div class="impact-box">
               <strong>${escapeHtml(formatCurrency(roundedDistanceFromLow))} above the 30-day spot low</strong>
             </div>
-            <p class="loss-framing">This recommendation is based on 24K spot history, not billed retail rates.</p>
+            <p class="loss-framing">${
+              live.retail_price_is_modeled
+                ? "Headline price is modeled from spot using a retail multiplier. Analytics still use 24K spot history."
+                : "Headline price uses retail 22K. Analytics still use 24K spot history."
+            }</p>
 
             ${
               prediction
                 ? `<div class="prediction-box">
                     <div class="prediction-main">
-                      <span>3-day retail estimate outlook</span>
+                      <span>3-day retail outlook</span>
                       <strong>
                         ${escapeHtml(formatCurrency(prediction.expected))}
                       </strong>

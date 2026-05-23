@@ -52,7 +52,7 @@ Alerts are deduplicated per user, per day, per condition.
 ## Supabase setup
 
 1. Create a Supabase project manually.
-2. Copy the pooled connection string into `DATABASE_URL`.
+2. Copy the Prisma-compatible pooled connection string into `DATABASE_URL`.
 3. Copy the direct connection string into `DIRECT_URL`.
 4. Run:
 
@@ -68,6 +68,15 @@ Alerts are deduplicated per user, per day, per condition.
    ```
 
 The server now expects Prisma migrations to own table creation. The old SQLite bootstrap path has been removed.
+
+Expected format:
+
+```env
+DATABASE_URL="postgres://<db-user>.<project-ref>:<password>@aws-<region>.pooler.supabase.com:5432/postgres"
+DIRECT_URL="postgresql://postgres:<password>@db.<project-ref>.supabase.co:5432/postgres"
+```
+
+For serverless Prisma deployments, Supabase also documents transaction mode on port `6543`; if you use that, add `?pgbouncer=true` to `DATABASE_URL`. `DIRECT_URL` should still stay on the direct `db.<project-ref>.supabase.co` host.
 
 ## Setup
 
@@ -102,6 +111,7 @@ The server now expects Prisma migrations to own table creation. The old SQLite b
 - `DIRECT_URL`
 - `CRON_SCHEDULE`
 - `FALLBACK_PRICE_PER_GRAM`
+- `GOLD_RETAIL_SPOT_MULTIPLIER`
 - `SMTP_HOST`
 - `SMTP_PORT`
 - `SMTP_USER`
