@@ -3,7 +3,10 @@ loadEnv();
 
 const prisma = require("../lib/prisma");
 const { validateEnv } = require("../config/env");
-const { backfillHistory } = require("../services/marketDataService");
+const {
+  backfillHistory,
+  ensureMarketDataConsistency,
+} = require("../services/marketDataService");
 
 async function main() {
   validateEnv();
@@ -12,8 +15,9 @@ async function main() {
   const result = await backfillHistory({
     force: process.argv.includes("--force"),
   });
+  const consistency = await ensureMarketDataConsistency();
 
-  console.log(JSON.stringify(result, null, 2));
+  console.log(JSON.stringify({ result, consistency }, null, 2));
 }
 
 main()

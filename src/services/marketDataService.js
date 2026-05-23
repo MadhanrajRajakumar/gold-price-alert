@@ -4,19 +4,41 @@ const {
   fetchHistoryRange,
   fetchOhlcRange,
   fetchRealtimePrice,
+  MODELED_RETAIL_MODEL_VERSION,
+  MODELED_RETAIL_PRICE_SOURCE,
   modelRetail24KFromSpot24K,
 } = require("./goldApiClient");
 
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
+const RANGE_ALIASES = {
+  "7d": "7d",
+  "7D": "7d",
+  "30d": "30d",
+  "30D": "30d",
+  "6m": "6M",
+  "6M": "6M",
+  "1w": "1W",
+  "1W": "1W",
+  "1m": "1M",
+  "1M": "1M",
+  "3m": "3M",
+  "3M": "3M",
+  "1y": "1Y",
+  "1Y": "1Y",
+};
 const RANGE_TO_DAYS = {
   "7d": 7,
   "30d": 30,
-  "6m": 183,
+  "6M": 183,
   "1W": 7,
   "1M": 30,
   "3M": 90,
   "1Y": 365,
 };
+const SIGNAL_PRICE_BASIS = "spot_24k_inr_per_gram";
+const DISPLAY_PRICE_BASIS = "retail_22k_inr_per_gram";
+const SHORT_RANGE_SAMPLING_STRATEGY = "mixed_daily_history_and_intraday_realtime";
+const LONG_RANGE_SAMPLING_STRATEGY = "daily_close_summary";
 
 function isMissingTableError(error) {
   return (
@@ -54,7 +76,7 @@ function getDateKey(date = new Date()) {
 
 function normalizeRange(range = "30d") {
   const normalized = String(range).trim();
-  return RANGE_TO_DAYS[normalized] ? normalized : "30d";
+  return RANGE_ALIASES[normalized] || "30d";
 }
 
 function getRangeStart(range = "30d", referenceDate = new Date()) {
@@ -77,18 +99,27 @@ function serializeGoldPrice(row) {
       estimateRetail22KFromSpot24K(spot24kInrPerGram)
     ).toFixed(2),
   );
-  const retailPriceSource = row.retailPriceSource || "modeled_spot_multiplier";
+  const retailPriceSource = row.retailPriceSource || MODELED_RETAIL_PRICE_SOURCE;
+  const retailPriceModelVersion =
+    row.retailPriceModelVersion || MODELED_RETAIL_MODEL_VERSION;
 
   return {
     id: row.id,
     date: row.timestamp.toISOString(),
     timestamp: row.timestamp.toISOString(),
-    price_basis: "spot_24k_inr_per_gram",
+    price_basis: SIGNAL_PRICE_BASIS,
+    signal_price_value: spot24kInrPerGram,
+    signal_price_basis: SIGNAL_PRICE_BASIS,
+    display_price_value: retail22kInrPerGram,
+    display_price_basis: DISPLAY_PRICE_BASIS,
+    display_price_source: retailPriceSource,
+    display_price_model_version: retailPriceModelVersion,
     spot_24k_inr_per_gram: spot24kInrPerGram,
     retail_24k_inr_per_gram: retail24kInrPerGram,
     retail_22k_inr_per_gram: retail22kInrPerGram,
     retail_22k_inr_per_gram_estimate: retail22kInrPerGram,
     retail_price_source: retailPriceSource,
+    retail_price_model_version: retailPriceModelVersion,
     retail_price_is_modeled: retailPriceSource === "modeled_spot_multiplier",
     source: row.source,
     created_at: row.createdAt.toISOString(),
@@ -101,18 +132,36 @@ function serializeDailySummary(row) {
   }
 
   const closeSpot24kInrPerGram = Number(row.closePrice.toFixed(2));
-  const closeRetail22kInrPerGramEstimate = estimateRetail22KFromSpot24K(
+  const closeRetail24kInrPerGram = modelRetail24KFromSpot24K(
+    closeSpot24kInrPerGram,
+  );
+  const closeRetail22kInrPerGram = estimateRetail22KFromSpot24K(
     closeSpot24kInrPerGram,
   );
 
   return {
     date: getDateKey(row.date),
-    price_basis: "spot_24k_inr_per_gram",
+    timestamp: row.date.toISOString(),
+    price_basis: SIGNAL_PRICE_BASIS,
+    signal_price_value: closeSpot24kInrPerGram,
+    signal_price_basis: SIGNAL_PRICE_BASIS,
+    display_price_value: closeRetail22kInrPerGram,
+    display_price_basis: DISPLAY_PRICE_BASIS,
+    display_price_source: MODELED_RETAIL_PRICE_SOURCE,
+    display_price_model_version: MODELED_RETAIL_MODEL_VERSION,
+    spot_24k_inr_per_gram: closeSpot24kInrPerGram,
+    retail_24k_inr_per_gram: closeRetail24kInrPerGram,
+    retail_22k_inr_per_gram: closeRetail22kInrPerGram,
     open_spot_24k_inr_per_gram: Number(row.openPrice.toFixed(2)),
     high_spot_24k_inr_per_gram: Number(row.highPrice.toFixed(2)),
     low_spot_24k_inr_per_gram: Number(row.lowPrice.toFixed(2)),
     close_spot_24k_inr_per_gram: closeSpot24kInrPerGram,
-    close_retail_22k_inr_per_gram_estimate: closeRetail22kInrPerGramEstimate,
+    close_retail_24k_inr_per_gram: closeRetail24kInrPerGram,
+    close_retail_22k_inr_per_gram: closeRetail22kInrPerGram,
+    close_retail_22k_inr_per_gram_estimate: closeRetail22kInrPerGram,
+    retail_price_source: MODELED_RETAIL_PRICE_SOURCE,
+    retail_price_model_version: MODELED_RETAIL_MODEL_VERSION,
+    retail_price_is_modeled: true,
     source: row.source,
     validated_at: row.validatedAt ? row.validatedAt.toISOString() : null,
     validation_status: row.validationStatus,
@@ -139,7 +188,9 @@ async function storeRealtimeSnapshot(snapshot) {
       pricePerGram: snapshot.spot24kInrPerGram,
       retail24kPricePerGram: snapshot.retail24kInrPerGram ?? null,
       retail22kPricePerGram: snapshot.retail22kInrPerGram ?? null,
-      retailPriceSource: snapshot.retailPriceSource || "modeled_spot_multiplier",
+      retailPriceSource: snapshot.retailPriceSource || MODELED_RETAIL_PRICE_SOURCE,
+      retailPriceModelVersion:
+        snapshot.retailPriceModelVersion || MODELED_RETAIL_MODEL_VERSION,
       source: snapshot.source,
     },
     create: {
@@ -147,7 +198,9 @@ async function storeRealtimeSnapshot(snapshot) {
       pricePerGram: snapshot.spot24kInrPerGram,
       retail24kPricePerGram: snapshot.retail24kInrPerGram ?? null,
       retail22kPricePerGram: snapshot.retail22kInrPerGram ?? null,
-      retailPriceSource: snapshot.retailPriceSource || "modeled_spot_multiplier",
+      retailPriceSource: snapshot.retailPriceSource || MODELED_RETAIL_PRICE_SOURCE,
+      retailPriceModelVersion:
+        snapshot.retailPriceModelVersion || MODELED_RETAIL_MODEL_VERSION,
       source: snapshot.source,
     },
   });
@@ -163,6 +216,74 @@ async function rebuildDailySummariesFromRows(rows) {
   for (const day of distinctDays) {
     await aggregateDailySummary(new Date(day));
   }
+}
+
+async function syncDailySummariesBetween(startDate, endDate) {
+  const rows = await getPriceRowsBetween(startOfDay(startDate), endOfDay(endDate));
+  const distinctDays = [
+    ...new Set(rows.map((row) => startOfDay(row.timestamp).toISOString())),
+  ];
+
+  for (const day of distinctDays) {
+    await aggregateDailySummary(new Date(day));
+  }
+
+  return distinctDays.length;
+}
+
+async function syncDailySummariesThrough(referenceDate = new Date()) {
+  const latestSummary = await withMissingTableFallback(
+    () =>
+      prisma.dailySummary.findFirst({
+        orderBy: {
+          date: "desc",
+        },
+      }),
+    null,
+  );
+
+  if (!latestSummary) {
+    return syncDailySummariesBetween(getRangeStart("6M", referenceDate), referenceDate);
+  }
+
+  const nextDate = new Date(startOfDay(latestSummary.date).getTime() + DAY_IN_MS);
+  if (nextDate.getTime() > startOfDay(referenceDate).getTime()) {
+    return 0;
+  }
+
+  return syncDailySummariesBetween(nextDate, referenceDate);
+}
+
+async function backfillModeledRetailPrices({ force = false } = {}) {
+  const retailSpotMultiplier = Number(process.env.GOLD_RETAIL_SPOT_MULTIPLIER || 1.155);
+  const purityRatio = 22 / 24;
+
+  if (!Number.isFinite(retailSpotMultiplier) || retailSpotMultiplier <= 0) {
+    throw new Error("GOLD_RETAIL_SPOT_MULTIPLIER must be a positive number");
+  }
+
+  const whereClause = force
+    ? ""
+    : `WHERE "retail_24k_price_per_gram" IS NULL
+        OR "retail_22k_price_per_gram" IS NULL
+        OR "retail_price_source" IS NULL
+        OR "retail_price_model_version" IS NULL`;
+
+  return prisma.$executeRawUnsafe(
+    `
+      UPDATE "gold_prices"
+      SET
+        "retail_24k_price_per_gram" = ROUND(("price_per_gram"::numeric * $1::numeric), 2),
+        "retail_22k_price_per_gram" = ROUND(("price_per_gram"::numeric * $1::numeric * $2::numeric), 2),
+        "retail_price_source" = $3,
+        "retail_price_model_version" = $4
+      ${whereClause}
+    `,
+    retailSpotMultiplier,
+    purityRatio,
+    MODELED_RETAIL_PRICE_SOURCE,
+    MODELED_RETAIL_MODEL_VERSION,
+  );
 }
 
 async function ingestRealtimeSnapshot() {
@@ -438,7 +559,9 @@ async function backfillHistory({ startDate, endDate, force = false } = {}) {
         pricePerGram: row.spot24kInrPerGram,
         retail24kPricePerGram: row.retail24kInrPerGram ?? null,
         retail22kPricePerGram: row.retail22kInrPerGram ?? null,
-        retailPriceSource: row.retailPriceSource || "modeled_spot_multiplier",
+        retailPriceSource: row.retailPriceSource || MODELED_RETAIL_PRICE_SOURCE,
+        retailPriceModelVersion:
+          row.retailPriceModelVersion || MODELED_RETAIL_MODEL_VERSION,
         source: row.source,
       },
       create: {
@@ -446,7 +569,9 @@ async function backfillHistory({ startDate, endDate, force = false } = {}) {
         pricePerGram: row.spot24kInrPerGram,
         retail24kPricePerGram: row.retail24kInrPerGram ?? null,
         retail22kPricePerGram: row.retail22kInrPerGram ?? null,
-        retailPriceSource: row.retailPriceSource || "modeled_spot_multiplier",
+        retailPriceSource: row.retailPriceSource || MODELED_RETAIL_PRICE_SOURCE,
+        retailPriceModelVersion:
+          row.retailPriceModelVersion || MODELED_RETAIL_MODEL_VERSION,
         source: row.source,
       },
     });
@@ -469,6 +594,21 @@ async function backfillHistory({ startDate, endDate, force = false } = {}) {
   return {
     skipped: false,
     inserted,
+  };
+}
+
+async function ensureMarketDataConsistency(referenceDate = new Date()) {
+  const [backfilledRetailRows] = await Promise.all([
+    backfillModeledRetailPrices(),
+  ]);
+  const syncedDailySummaryDays = await syncDailySummariesBetween(
+    getRangeStart("6M", referenceDate),
+    referenceDate,
+  );
+
+  return {
+    backfilledRetailRows,
+    syncedDailySummaryDays,
   };
 }
 
@@ -527,16 +667,24 @@ async function buildAnalytics(referenceDate = new Date()) {
 
   const currentPrice = latest?.spot_24k_inr_per_gram ?? null;
   const currentRetailPrice =
-    latest?.retail_22k_inr_per_gram_estimate ?? null;
+    latest?.retail_22k_inr_per_gram ?? latest?.retail_22k_inr_per_gram_estimate ?? null;
   return {
     current_price: currentPrice,
     current_spot_24k_inr_per_gram: currentPrice,
+    current_display_price: currentRetailPrice,
+    current_display_price_basis: DISPLAY_PRICE_BASIS,
+    current_display_price_source:
+      latest?.retail_price_source || MODELED_RETAIL_PRICE_SOURCE,
+    current_display_price_model_version:
+      latest?.retail_price_model_version || MODELED_RETAIL_MODEL_VERSION,
     current_retail_22k_inr_per_gram_estimate: currentRetailPrice,
     low_30d: low30d,
     high_30d: high30d,
     retail_low_30d: low30d === null ? null : estimateRetail22KFromSpot24K(low30d),
     retail_high_30d:
       high30d === null ? null : estimateRetail22KFromSpot24K(high30d),
+    signal_price_basis: SIGNAL_PRICE_BASIS,
+    display_price_basis: DISPLAY_PRICE_BASIS,
     price_position:
       currentPrice === null ? null : getPricePosition(currentPrice, low30d, high30d),
     buy_signal:
@@ -549,22 +697,14 @@ async function getPriceRangePayload(range = "30d", referenceDate = new Date()) {
   const normalizedRange = normalizeRange(range);
   let points = [];
 
-  if (normalizedRange === "6m") {
+  if (normalizedRange === "6M") {
+    await syncDailySummariesThrough(referenceDate);
     const rows = await getDailySummaryRowsBetween(
       getRangeStart(normalizedRange, referenceDate),
       startOfDay(referenceDate),
     );
 
-    points = rows.map((row) => ({
-      date: row.date.toISOString(),
-      timestamp: row.date.toISOString(),
-      price_basis: "spot_24k_inr_per_gram",
-      spot_24k_inr_per_gram: Number(row.closePrice.toFixed(2)),
-      retail_22k_inr_per_gram_estimate: estimateRetail22KFromSpot24K(
-        Number(row.closePrice.toFixed(2)),
-      ),
-      source: row.source,
-    }));
+    points = rows.map(serializeDailySummary);
   } else {
     const rows = await getPriceRowsBetween(
       getRangeStart(normalizedRange, referenceDate),
@@ -576,8 +716,16 @@ async function getPriceRangePayload(range = "30d", referenceDate = new Date()) {
   const extrema = buildChartExtrema(points);
   return {
     range: normalizedRange,
-    price_basis: "spot_24k_inr_per_gram",
+    price_basis: SIGNAL_PRICE_BASIS,
+    signal_price_basis: SIGNAL_PRICE_BASIS,
+    display_price_basis: DISPLAY_PRICE_BASIS,
+    display_price_source: MODELED_RETAIL_PRICE_SOURCE,
+    display_price_model_version: MODELED_RETAIL_MODEL_VERSION,
     display_basis_label: "24K spot INR/g",
+    sampling_strategy:
+      normalizedRange === "6M"
+        ? LONG_RANGE_SAMPLING_STRATEGY
+        : SHORT_RANGE_SAMPLING_STRATEGY,
     points,
     ...extrema,
     ...(await buildAnalytics(referenceDate)),
@@ -599,7 +747,9 @@ async function getPaymentWindowRange(lastPaymentDate, referenceDate = new Date()
 module.exports = {
   aggregateDailySummary,
   backfillHistory,
+  backfillModeledRetailPrices,
   buildAnalytics,
+  ensureMarketDataConsistency,
   endOfDay,
   get30DayHigh,
   get30DayLow,
@@ -616,5 +766,7 @@ module.exports = {
   serializeGoldPrice,
   startOfDay,
   storeRealtimeSnapshot,
+  syncDailySummariesBetween,
+  syncDailySummariesThrough,
   validateDailySummary,
 };

@@ -3,6 +3,7 @@ const { validateEnv } = require("../config/env");
 const {
   aggregateDailySummary,
   backfillHistory,
+  ensureMarketDataConsistency,
   ingestRealtimeSnapshot,
   getLatestStoredPrice,
   startOfDay,
@@ -65,6 +66,8 @@ async function primeMarketData() {
   if (!latest) {
     await backfillHistory();
   }
+
+  await ensureMarketDataConsistency();
 }
 
 function startScheduler() {

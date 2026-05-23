@@ -4,6 +4,8 @@ const GOLD_API_BASE_URL = "https://api.gold-api.com";
 const TROY_OUNCE_TO_GRAMS = 31.1035;
 const RETAIL_PURITY_RATIO = 22 / 24;
 const EXCHANGE_RATE_CACHE_TTL_MS = 10 * 60 * 1000;
+const MODELED_RETAIL_PRICE_SOURCE = "modeled_spot_multiplier";
+const MODELED_RETAIL_MODEL_VERSION = "spot_multiplier_v1";
 
 let cachedSpotReference = null;
 
@@ -83,7 +85,8 @@ function buildNormalizedSpotPrice({
     retail24kInrPerGram: normalizedRetail24k,
     retail22kInrPerGram: normalizedRetail22k,
     retail22kInrPerGramEstimate: normalizedRetail22k,
-    retailPriceSource: "modeled_spot_multiplier",
+    retailPriceSource: MODELED_RETAIL_PRICE_SOURCE,
+    retailPriceModelVersion: MODELED_RETAIL_MODEL_VERSION,
     raw,
   };
 }
@@ -286,6 +289,8 @@ async function fetchOhlcRange(startTimestamp, endTimestamp) {
 module.exports = {
   RETAIL_PURITY_RATIO,
   TROY_OUNCE_TO_GRAMS,
+  MODELED_RETAIL_MODEL_VERSION,
+  MODELED_RETAIL_PRICE_SOURCE,
   buildNormalizedHistoryPoint,
   buildNormalizedSpotPrice,
   estimateRetail22KFromSpot24K,

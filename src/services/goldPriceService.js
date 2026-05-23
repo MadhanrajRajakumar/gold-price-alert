@@ -26,7 +26,7 @@ const SUPPORTED_CITIES = ["Chennai", "Mumbai", "Delhi", "Coimbatore"];
 const SUPPORTED_RANGES = {
   "7d": 7,
   "30d": 30,
-  "6m": 183,
+  "6M": 183,
   "1W": 7,
   "1M": 30,
   "3M": 90,
@@ -188,6 +188,12 @@ function getRetailHeadlineLabel(entry) {
     : "Retail 22K";
 }
 
+function getRangeContextLabel(entry) {
+  return entry?.retail_price_is_modeled
+    ? "modeled retail"
+    : "retail";
+}
+
 function serializeStoredPrice(entry, referenceDate = new Date()) {
   if (!entry) {
     return null;
@@ -207,6 +213,14 @@ function serializeStoredPrice(entry, referenceDate = new Date()) {
     id: entry.id,
     date: timestamp.toISOString(),
     timestamp: timestamp.toISOString(),
+    display_price_value:
+      entry.retail_22k_inr_per_gram ?? entry.retail_22k_inr_per_gram_estimate,
+    display_price_basis: "retail_22k_inr_per_gram",
+    display_price_source: entry.retail_price_source || "modeled_spot_multiplier",
+    display_price_model_version:
+      entry.retail_price_model_version || "spot_multiplier_v1",
+    signal_price_value: entry.spot_24k_inr_per_gram,
+    signal_price_basis: "spot_24k_inr_per_gram",
     primary_price_inr_per_gram:
       entry.retail_22k_inr_per_gram ?? entry.retail_22k_inr_per_gram_estimate,
     primary_price_label: getRetailHeadlineLabel(entry),
@@ -218,6 +232,8 @@ function serializeStoredPrice(entry, referenceDate = new Date()) {
       entry.retail_22k_inr_per_gram ?? entry.retail_22k_inr_per_gram_estimate,
     retail_22k_inr_per_gram_estimate: entry.retail_22k_inr_per_gram_estimate,
     retail_price_source: entry.retail_price_source || "modeled_spot_multiplier",
+    retail_price_model_version:
+      entry.retail_price_model_version || "spot_multiplier_v1",
     retail_price_is_modeled: Boolean(entry.retail_price_is_modeled),
     price_basis: "retail_22k_inr_per_gram",
     source: entry.source,
@@ -310,9 +326,10 @@ async function buildDecision({ currentPrice, lastPaymentDate, referenceDate = ne
   const high = analytics.high_30d ?? currentPrice;
   const retailLow = analytics.retail_low_30d ?? null;
   const retailHigh = analytics.retail_high_30d ?? null;
-  const currentRetailPrice =
-    analytics.current_retail_22k_inr_per_gram_estimate ?? null;
-  const rangePosition = getPricePosition(currentPrice, low, high) ?? 0.5;
+  const currentRetailPrice = analytics.current_display_price ?? null;
+  const signalRangePosition = getPricePosition(currentPrice, low, high) ?? 0.5;
+  const displayRangePosition =
+    getPricePosition(currentRetailPrice, retailLow, retailHigh) ?? signalRangePosition;
   const decision = getBuySignal(currentPrice, low, high);
   const daysLeft = lastPaymentDate ? getDaysLeft(lastPaymentDate, referenceDate) : 30;
   const urgency = Number(Math.max(0, Math.min(1, (30 - daysLeft) / 30)).toFixed(4));
@@ -326,10 +343,16 @@ async function buildDecision({ currentPrice, lastPaymentDate, referenceDate = ne
     lowestRetailEstimate: retailLow,
     highestRetailEstimate: retailHigh,
     currentRetailPrice,
-    rangePosition,
+    signalRangePosition,
+    displayRangePosition,
     urgency,
     daysLeft,
-    trend: rangePosition <= 0.33 ? "LOW" : rangePosition >= 0.66 ? "HIGH" : "MID",
+    trend:
+      signalRangePosition <= 0.33
+        ? "LOW"
+        : signalRangePosition >= 0.66
+          ? "HIGH"
+          : "MID",
     avgPrice: Number((((low ?? currentPrice) + (high ?? currentPrice)) / 2).toFixed(2)),
     deviationPercent: Number((((currentPrice - low) / (low || currentPrice || 1)) * 100).toFixed(2)),
     deviation: Number((currentPrice - low).toFixed(2)),
@@ -339,6 +362,9 @@ async function buildDecision({ currentPrice, lastPaymentDate, referenceDate = ne
       max: Math.round(retailHigh ?? high),
       expected: Math.round(currentRetailPrice ?? currentPrice),
       basis: "retail_22k_inr_per_gram",
+      source: analytics.current_display_price_source || "modeled_spot_multiplier",
+      model_version:
+        analytics.current_display_price_model_version || "spot_multiplier_v1",
     },
     drop_probability: decision === "BUY" ? 20 : decision === "WAIT" ? 70 : 50,
     extra_cost: Number((Math.max(0, currentPrice - low)).toFixed(2)),
@@ -479,10 +505,17 @@ async function getDashboardSummary(
         lowest_retail_estimate: decisionData.lowestRetailEstimate,
         highest_retail_estimate: decisionData.highestRetailEstimate,
         current_retail_price: decisionData.currentRetailPrice,
-        range_position: decisionData.rangePosition,
+        range_position: decisionData.signalRangePosition,
+        display_range_position: decisionData.displayRangePosition,
         urgency: decisionData.urgency,
         days_left: decisionData.daysLeft,
         trend: decisionData.trend,
+        signal_basis: "spot_24k_inr_per_gram",
+        display_basis: "retail_22k_inr_per_gram",
+        display_price_source:
+          livePrice.retail_price_source || "modeled_spot_multiplier",
+        display_price_model_version:
+          livePrice.retail_price_model_version || "spot_multiplier_v1",
         distance_from_low: decisionData.distanceFromLow,
         prediction_3d: decisionData.prediction_3d,
         drop_probability: decisionData.drop_probability,
@@ -513,6 +546,7 @@ function buildAlertMessages(summary) {
   const messages = [];
   const retailCurrent = summary.live_price.primary_price_inr_per_gram;
   const spotCurrent = summary.live_price.spot_24k_inr_per_gram;
+  const retailContextLabel = getRangeContextLabel(summary.live_price);
   const lowest = summary.decision?.decision_meta?.lowest_price;
   const buySignal = summary.chart?.buy_signal || "HOLD";
 
@@ -520,7 +554,7 @@ function buildAlertMessages(summary) {
     messages.push({
       type: "LOWEST",
       subject: "Gold Price Alert: Near 30-day low",
-      text: `Gold spot is near the 30-day low at INR ${spotCurrent.toFixed(2)}/g. Retail 22K is INR ${retailCurrent.toFixed(2)}/g. BUY.`,
+      text: `Gold spot is near the 30-day low at INR ${spotCurrent.toFixed(2)}/g. ${retailContextLabel} 22K is INR ${retailCurrent.toFixed(2)}/g. BUY.`,
     });
   }
 
@@ -543,7 +577,7 @@ function buildAlertMessages(summary) {
   messages.push({
     type: "DAILY",
     subject: "Gold Price Alert: Daily summary",
-    text: `Retail 22K: INR ${retailCurrent.toFixed(2)}/g. Spot 24K: INR ${spotCurrent.toFixed(2)}/g. Signal: ${buySignal}.`,
+    text: `${retailContextLabel} 22K: INR ${retailCurrent.toFixed(2)}/g. Spot 24K: INR ${spotCurrent.toFixed(2)}/g. Signal: ${buySignal}.`,
   });
 
   return messages;
@@ -774,6 +808,7 @@ async function buildGoldAlert(userId) {
 
   const retailPrice = summary.live_price.primary_price_inr_per_gram;
   const spotPrice = summary.live_price.spot_24k_inr_per_gram;
+  const retailContextLabel = getRangeContextLabel(summary.live_price);
   const signal = summary.chart.buy_signal || "HOLD";
   const low = summary.chart.low_30d ?? spotPrice;
   const high = summary.chart.high_30d ?? spotPrice;
@@ -781,7 +816,7 @@ async function buildGoldAlert(userId) {
 
   return `Gold Alert
 
-Retail 22K: INR ${retailPrice.toFixed(2)}/g
+${retailContextLabel} 22K: INR ${retailPrice.toFixed(2)}/g
 Spot 24K: INR ${spotPrice.toFixed(2)}/g
 30-day spot low: INR ${Number(low).toFixed(2)}/g
 30-day spot high: INR ${Number(high).toFixed(2)}/g
