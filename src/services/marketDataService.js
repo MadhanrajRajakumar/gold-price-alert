@@ -39,6 +39,9 @@ const SIGNAL_PRICE_BASIS = "spot_24k_inr_per_gram";
 const DISPLAY_PRICE_BASIS = "retail_22k_inr_per_gram";
 const SHORT_RANGE_SAMPLING_STRATEGY = "mixed_daily_history_and_intraday_realtime";
 const LONG_RANGE_SAMPLING_STRATEGY = "daily_close_summary";
+const MARKET_DATA_JOB_NAME = "daily-market-data-cron";
+const HISTORY_BACKFILL_JOB_NAME = "history-backfill";
+const MONTHLY_WINDOW_DAYS = 30;
 
 function isMissingTableError(error) {
   return (
@@ -82,6 +85,64 @@ function normalizeRange(range = "30d") {
 function getRangeStart(range = "30d", referenceDate = new Date()) {
   const days = RANGE_TO_DAYS[normalizeRange(range)];
   return new Date(startOfDay(referenceDate).getTime() - (days - 1) * DAY_IN_MS);
+}
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function getDatesInRange(startDate, endDate) {
+  const dates = [];
+  for (
+    let cursor = startOfDay(startDate);
+    cursor.getTime() <= startOfDay(endDate).getTime();
+    cursor = new Date(cursor.getTime() + DAY_IN_MS)
+  ) {
+    dates.push(new Date(cursor));
+  }
+  return dates;
+}
+
+function getMissingDatesBetween(latestStoredDate, referenceDate = new Date()) {
+  const today = startOfDay(referenceDate);
+  if (!latestStoredDate) {
+    return [];
+  }
+
+  const start = new Date(startOfDay(latestStoredDate).getTime() + DAY_IN_MS);
+  if (start.getTime() > today.getTime()) {
+    return [];
+  }
+
+  return getDatesInRange(start, today);
+}
+
+function computeConfidenceScore({
+  coverageRatio,
+  validationRatio,
+  rangePosition,
+  signal,
+}) {
+  const safeCoverage = clamp(Number(coverageRatio) || 0, 0, 1);
+  const safeValidation = clamp(Number(validationRatio) || 0, 0, 1);
+  const safeRangePosition =
+    rangePosition === null || rangePosition === undefined
+      ? 0.5
+      : clamp(Number(rangePosition), 0, 1);
+  const signalStrength =
+    signal === "BUY"
+      ? 1 - safeRangePosition
+      : signal === "WAIT"
+        ? safeRangePosition
+        : 1 - Math.abs(safeRangePosition - 0.5) * 2;
+
+  return Math.round(
+    clamp(
+      35 + safeCoverage * 30 + safeValidation * 20 + clamp(signalStrength, 0, 1) * 15,
+      35,
+      96,
+    ),
+  );
 }
 
 function serializeGoldPrice(row) {
@@ -180,6 +241,41 @@ async function recordJobRun(jobName, data) {
 }
 
 async function storeRealtimeSnapshot(snapshot) {
+  const existingSameDayRealtime = await withMissingTableFallback(
+    () =>
+      prisma.goldPrice.findFirst({
+        where: {
+          timestamp: {
+            gte: startOfDay(snapshot.timestamp),
+            lte: endOfDay(snapshot.timestamp),
+          },
+          source: snapshot.source,
+        },
+        orderBy: {
+          timestamp: "desc",
+        },
+      }),
+    null,
+  );
+
+  if (existingSameDayRealtime) {
+    return prisma.goldPrice.update({
+      where: {
+        id: existingSameDayRealtime.id,
+      },
+      data: {
+        timestamp: snapshot.timestamp,
+        pricePerGram: snapshot.spot24kInrPerGram,
+        retail24kPricePerGram: snapshot.retail24kInrPerGram ?? null,
+        retail22kPricePerGram: snapshot.retail22kInrPerGram ?? null,
+        retailPriceSource: snapshot.retailPriceSource || MODELED_RETAIL_PRICE_SOURCE,
+        retailPriceModelVersion:
+          snapshot.retailPriceModelVersion || MODELED_RETAIL_MODEL_VERSION,
+        source: snapshot.source,
+      },
+    });
+  }
+
   return prisma.goldPrice.upsert({
     where: {
       timestamp: snapshot.timestamp,
@@ -506,7 +602,7 @@ async function validateDailySummary(date = new Date()) {
 }
 
 async function backfillHistory({ startDate, endDate, force = false } = {}) {
-  const jobName = "history-backfill";
+  const jobName = HISTORY_BACKFILL_JOB_NAME;
   const existingRun = await prisma.systemJobRun.findUnique({
     where: { jobName },
   });
@@ -601,9 +697,11 @@ async function ensureMarketDataConsistency(referenceDate = new Date()) {
   const [backfilledRetailRows] = await Promise.all([
     backfillModeledRetailPrices(),
   ]);
+  const latest = await getLatestStoredPrice();
+  const syncThroughDate = latest?.timestamp ? new Date(latest.timestamp) : referenceDate;
   const syncedDailySummaryDays = await syncDailySummariesBetween(
-    getRangeStart("6M", referenceDate),
-    referenceDate,
+    getRangeStart("6M", syncThroughDate),
+    syncThroughDate,
   );
 
   return {
@@ -613,11 +711,27 @@ async function ensureMarketDataConsistency(referenceDate = new Date()) {
 }
 
 async function get30DayLow(referenceDate = new Date()) {
-  return getMinPriceBetween(getRangeStart("30d", referenceDate), referenceDate);
+  const rows = await getDailySummaryRowsBetween(
+    getRangeStart("30d", referenceDate),
+    startOfDay(referenceDate),
+  );
+  if (!rows.length) {
+    return null;
+  }
+
+  return Math.min(...rows.map((row) => row.lowPrice));
 }
 
 async function get30DayHigh(referenceDate = new Date()) {
-  return getMaxPriceBetween(getRangeStart("30d", referenceDate), referenceDate);
+  const rows = await getDailySummaryRowsBetween(
+    getRangeStart("30d", referenceDate),
+    startOfDay(referenceDate),
+  );
+  if (!rows.length) {
+    return null;
+  }
+
+  return Math.max(...rows.map((row) => row.highPrice));
 }
 
 function getPricePosition(currentPrice, lowPrice, highPrice) {
@@ -659,15 +773,35 @@ function getBuySignal(currentPrice, lowPrice, highPrice) {
 }
 
 async function buildAnalytics(referenceDate = new Date()) {
-  const [latest, low30d, high30d] = await Promise.all([
-    getLatestStoredPrice(),
-    get30DayLow(referenceDate),
-    get30DayHigh(referenceDate),
-  ]);
+  const latest = await getLatestStoredPrice();
+  const analyticsDate = latest?.timestamp
+    ? startOfDay(new Date(latest.timestamp))
+    : startOfDay(referenceDate);
+  const summaryRows = await getDailySummaryRowsBetween(
+    getRangeStart("30d", analyticsDate),
+    analyticsDate,
+  );
+  const low30d = summaryRows.length
+    ? Math.min(...summaryRows.map((row) => row.lowPrice))
+    : null;
+  const high30d = summaryRows.length
+    ? Math.max(...summaryRows.map((row) => row.highPrice))
+    : null;
 
   const currentPrice = latest?.spot_24k_inr_per_gram ?? null;
   const currentRetailPrice =
     latest?.retail_22k_inr_per_gram ?? latest?.retail_22k_inr_per_gram_estimate ?? null;
+  const pricePosition =
+    currentPrice === null ? null : getPricePosition(currentPrice, low30d, high30d);
+  const buySignal = currentPrice === null ? "HOLD" : getBuySignal(currentPrice, low30d, high30d);
+  const coverageRatio = clamp(summaryRows.length / MONTHLY_WINDOW_DAYS, 0, 1);
+  const validatedRows = summaryRows.filter(
+    (row) => row.validationStatus === "validated" || row.validationStatus === "mismatch",
+  );
+  const validationRatio = summaryRows.length
+    ? clamp(validatedRows.length / summaryRows.length, 0, 1)
+    : 0;
+
   return {
     current_price: currentPrice,
     current_spot_24k_inr_per_gram: currentPrice,
@@ -685,11 +819,177 @@ async function buildAnalytics(referenceDate = new Date()) {
       high30d === null ? null : estimateRetail22KFromSpot24K(high30d),
     signal_price_basis: SIGNAL_PRICE_BASIS,
     display_price_basis: DISPLAY_PRICE_BASIS,
-    price_position:
-      currentPrice === null ? null : getPricePosition(currentPrice, low30d, high30d),
-    buy_signal:
-      currentPrice === null ? "HOLD" : getBuySignal(currentPrice, low30d, high30d),
+    price_position: pricePosition,
+    buy_signal: buySignal,
+    coverage_ratio: Number(coverageRatio.toFixed(4)),
+    validation_ratio: Number(validationRatio.toFixed(4)),
+    confidence: computeConfidenceScore({
+      coverageRatio,
+      validationRatio,
+      rangePosition: pricePosition,
+      signal: buySignal,
+    }),
+    monthly_window_days: MONTHLY_WINDOW_DAYS,
+    monthly_data_points: summaryRows.length,
+    analytics_reference_date: analyticsDate.toISOString(),
     last_updated: latest?.timestamp ?? null,
+  };
+}
+
+async function getLatestStoredMarketDate(referenceDate = new Date()) {
+  const latest = await withMissingTableFallback(
+    () =>
+      prisma.goldPrice.findFirst({
+        orderBy: {
+          timestamp: "desc",
+        },
+        select: {
+          timestamp: true,
+        },
+      }),
+    null,
+  );
+
+  return latest?.timestamp ? startOfDay(latest.timestamp) : null;
+}
+
+async function dailyMarketDataCron(referenceDate = new Date()) {
+  const startedAt = new Date();
+  await recordJobRun(MARKET_DATA_JOB_NAME, {
+    lastStartedAt: startedAt,
+    status: "running",
+    metadata: {
+      startedAt: startedAt.toISOString(),
+    },
+  });
+
+  try {
+    const latestStoredMarketDate = await getLatestStoredMarketDate(referenceDate);
+    let backfillResult = { skipped: true, inserted: 0 };
+    let missingDates = [];
+
+    if (!latestStoredMarketDate) {
+      backfillResult = await backfillHistory();
+    } else {
+      missingDates = getMissingDatesBetween(latestStoredMarketDate, referenceDate);
+    }
+
+    if (missingDates.length) {
+      backfillResult = await backfillHistory({
+        startDate: missingDates[0],
+        endDate: missingDates[missingDates.length - 1],
+        force: false,
+      });
+    }
+
+    const snapshot = await ingestRealtimeSnapshot();
+    const syncStartDate = missingDates.length ? missingDates[0] : startOfDay(snapshot.timestamp);
+    const syncEndDate = startOfDay(snapshot.timestamp);
+    const syncedDailySummaryDays = await syncDailySummariesBetween(syncStartDate, syncEndDate);
+    const validation = await validateDailySummary(syncEndDate);
+
+    const result = {
+      latestStoredMarketDate: latestStoredMarketDate
+        ? latestStoredMarketDate.toISOString()
+        : null,
+      missingDates: missingDates.map((date) => getDateKey(date)),
+      backfill: backfillResult,
+      snapshot: {
+        timestamp: snapshot.timestamp,
+        spot_24k_inr_per_gram: snapshot.spot_24k_inr_per_gram,
+        retail_22k_inr_per_gram: snapshot.retail_22k_inr_per_gram,
+      },
+      syncedDailySummaryDays,
+      validationStatus: validation?.summary?.validation_status || null,
+    };
+
+    await recordJobRun(MARKET_DATA_JOB_NAME, {
+      lastStartedAt: startedAt,
+      lastCompletedAt: new Date(),
+      status: "completed",
+      metadata: result,
+    });
+
+    return result;
+  } catch (error) {
+    await recordJobRun(MARKET_DATA_JOB_NAME, {
+      lastStartedAt: startedAt,
+      lastCompletedAt: new Date(),
+      status: "failed",
+      metadata: {
+        error: error.message,
+      },
+    });
+    throw error;
+  }
+}
+
+async function generateMarketDataAuditReport(referenceDate = new Date()) {
+  await ensureMarketDataConsistency(referenceDate);
+
+  const latest = await getLatestStoredPrice();
+  const analyticsDate = latest?.timestamp
+    ? startOfDay(new Date(latest.timestamp))
+    : startOfDay(referenceDate);
+  const summaryRows = await getDailySummaryRowsBetween(
+    getRangeStart("30d", analyticsDate),
+    analyticsDate,
+  );
+  const analytics = await buildAnalytics(analyticsDate);
+  const lowestRow = summaryRows.reduce(
+    (current, row) => (!current || row.lowPrice < current.lowPrice ? row : current),
+    null,
+  );
+  const highestRow = summaryRows.reduce(
+    (current, row) => (!current || row.highPrice > current.highPrice ? row : current),
+    null,
+  );
+  const recomputedSignal = getBuySignal(
+    analytics.current_price,
+    analytics.low_30d,
+    analytics.high_30d,
+  );
+
+  return {
+    reference_date: getDateKey(analyticsDate),
+    what_was_wrong: [
+      "Dashboard analytics previously mixed raw spot rows with display-only retail values, which could drift from monthly summary math.",
+      "Confidence values were static placeholders instead of derived from data quality and signal strength.",
+      "History completeness depended on user-driven refresh flows instead of a guaranteed daily ingestion path.",
+    ],
+    what_was_fixed: [
+      "Thirty-day low, high, range position, and signal now read from canonical DailySummary data.",
+      "Confidence is derived from coverage, validation ratio, and position strength within the monthly range.",
+      "A daily autonomous cron now backfills gaps, stores the current snapshot, and syncs summary rows without user activity.",
+    ],
+    signal_production: {
+      basis: SIGNAL_PRICE_BASIS,
+      formula: {
+        buy: "current_spot <= low_30d * 1.02",
+        wait: "current_spot >= high_30d * 0.98",
+        hold: "otherwise",
+      },
+      confidence_formula:
+        "Bounded score from 30-day data coverage, validation ratio, and signal strength from range position.",
+    },
+    current_market_state: {
+      current_spot_24k_inr_per_gram: analytics.current_spot_24k_inr_per_gram,
+      current_retail_22k_inr_per_gram: analytics.current_display_price,
+      low_30d: analytics.low_30d,
+      high_30d: analytics.high_30d,
+      low_source_date: lowestRow ? getDateKey(lowestRow.date) : null,
+      high_source_date: highestRow ? getDateKey(highestRow.date) : null,
+      monthly_data_points: analytics.monthly_data_points,
+      coverage_ratio: analytics.coverage_ratio,
+      validation_ratio: analytics.validation_ratio,
+      range_position: analytics.price_position,
+    },
+    current_recommendation: {
+      signal: analytics.buy_signal,
+      confidence: analytics.confidence,
+      mathematically_correct: analytics.buy_signal === recomputedSignal,
+      recomputed_signal: recomputedSignal,
+    },
   };
 }
 
@@ -749,19 +1049,27 @@ module.exports = {
   backfillHistory,
   backfillModeledRetailPrices,
   buildAnalytics,
+  computeConfidenceScore,
+  dailyMarketDataCron,
   ensureMarketDataConsistency,
   endOfDay,
+  generateMarketDataAuditReport,
   get30DayHigh,
   get30DayLow,
   getBuySignal,
+  getLatestStoredMarketDate,
   getLatestStoredPrice,
+  getMissingDatesBetween,
   getPaymentWindowRange,
   getPricePosition,
   getPriceRangePayload,
   getRangeStart,
   getDateKey,
   ingestRealtimeSnapshot,
+  MARKET_DATA_JOB_NAME,
+  MONTHLY_WINDOW_DAYS,
   normalizeRange,
+  recordJobRun,
   serializeDailySummary,
   serializeGoldPrice,
   startOfDay,

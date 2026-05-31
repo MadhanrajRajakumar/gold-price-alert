@@ -8,7 +8,6 @@ const { serializeUser } = require("./authService");
 const {
   buildAnalytics,
   getBuySignal,
-  ingestRealtimeSnapshot,
   getLatestStoredPrice,
   getPaymentWindowRange,
   getPricePosition,
@@ -269,12 +268,7 @@ async function storeDailyGoldPrice(_userId, _city = DEFAULT_CITY, referenceDate 
 
 async function refreshGoldPriceForUser(userId, referenceDate = new Date()) {
   const startedAt = Date.now();
-  const latestSnapshot = await ingestRealtimeSnapshot();
-  const livePrice = {
-    status: "available",
-    is_live_available: true,
-    ...serializeStoredPrice(latestSnapshot, referenceDate),
-  };
+  const livePrice = await fetchLatestGoldPrice(userId, DEFAULT_CITY, referenceDate);
   const durationMs = Date.now() - startedAt;
 
   await logActivity(userId, "manual_refresh_requested", {
@@ -336,7 +330,7 @@ async function buildDecision({ currentPrice, lastPaymentDate, referenceDate = ne
 
   return {
     decision,
-    confidence: decision === "BUY" ? 80 : decision === "WAIT" ? 75 : 60,
+    confidence: analytics.confidence,
     decisionNarrative: decision,
     lowestPrice: low,
     highestPrice: high,
@@ -357,28 +351,10 @@ async function buildDecision({ currentPrice, lastPaymentDate, referenceDate = ne
     deviationPercent: Number((((currentPrice - low) / (low || currentPrice || 1)) * 100).toFixed(2)),
     deviation: Number((currentPrice - low).toFixed(2)),
     distanceFromLow: Number((currentPrice - low).toFixed(2)),
-    prediction_3d: {
-      min: Math.round(retailLow ?? low),
-      max: Math.round(retailHigh ?? high),
-      expected: Math.round(currentRetailPrice ?? currentPrice),
-      basis: "retail_22k_inr_per_gram",
-      source: analytics.current_display_price_source || "modeled_spot_multiplier",
-      model_version:
-        analytics.current_display_price_model_version || "spot_multiplier_v1",
-    },
-    drop_probability: decision === "BUY" ? 20 : decision === "WAIT" ? 70 : 50,
-    extra_cost: Number((Math.max(0, currentPrice - low)).toFixed(2)),
-    waitScenario: {
-      risk_increase: Number((Math.max(0, high - currentPrice)).toFixed(2)),
-      potential_saving: Number((Math.max(0, currentPrice - low)).toFixed(2)),
-    },
-    data_points: 0,
-    premiumPrediction: {
-      best_day: null,
-      expected_price: null,
-      confidence: null,
-      locked: true,
-    },
+    dataPoints: analytics.monthly_data_points,
+    coverageRatio: analytics.coverage_ratio,
+    validationRatio: analytics.validation_ratio,
+    extraCost: Number((Math.max(0, currentPrice - low)).toFixed(2)),
     meta: {
       fallbackMode: "DB_ONLY",
     },
@@ -462,7 +438,8 @@ async function getDashboardSummary(
         lowestRetailEstimate: null,
         highestRetailEstimate: null,
         currentRetailPrice: null,
-        rangePosition: null,
+        signalRangePosition: null,
+        displayRangePosition: null,
         urgency: 0,
         daysLeft: paymentWindow?.daysLeft ?? 30,
         trend: "UNKNOWN",
@@ -470,12 +447,10 @@ async function getDashboardSummary(
         deviationPercent: 0,
         deviation: 0,
         distanceFromLow: 0,
-        prediction_3d: null,
-        drop_probability: 0,
-        extra_cost: 0,
-        waitScenario: null,
-        data_points: 0,
-        premiumPrediction: null,
+        extraCost: 0,
+        dataPoints: 0,
+        coverageRatio: 0,
+        validationRatio: 0,
         meta: { fallbackMode: "NO_DB_DATA" },
       };
 
@@ -517,15 +492,42 @@ async function getDashboardSummary(
         display_price_model_version:
           livePrice.retail_price_model_version || "spot_multiplier_v1",
         distance_from_low: decisionData.distanceFromLow,
-        prediction_3d: decisionData.prediction_3d,
-        drop_probability: decisionData.drop_probability,
-        extra_cost: decisionData.extra_cost,
-        wait_scenario: decisionData.waitScenario,
-        data_points: chart.points?.length || decisionData.data_points,
-        premium_prediction: decisionData.premiumPrediction,
+        extra_cost: decisionData.extraCost,
+        data_points: decisionData.dataPoints,
+        coverage_ratio: decisionData.coverageRatio,
+        validation_ratio: decisionData.validationRatio,
         fallback_mode: decisionData.meta?.fallbackMode || null,
         price_basis: "spot_24k_inr_per_gram",
       },
+    },
+    monthly_summary: {
+      low_price: decisionData.lowestRetailEstimate,
+      high_price: decisionData.highestRetailEstimate,
+      signal_low_price: decisionData.lowestPrice,
+      signal_high_price: decisionData.highestPrice,
+      signal_basis: "spot_24k_inr_per_gram",
+      display_basis: "retail_22k_inr_per_gram",
+      low_date: chart.lowest?.date || null,
+      high_date: chart.highest?.date || null,
+    },
+    advanced_insights: {
+      freshness_label: livePrice.freshness_label || null,
+      signal_basis: "spot_24k_inr_per_gram",
+      display_basis: "retail_22k_inr_per_gram",
+      data_points_reviewed: decisionData.dataPoints,
+      range_position: decisionData.signalRangePosition,
+      display_range_position: decisionData.displayRangePosition,
+      days_left: decisionData.daysLeft,
+      urgency: decisionData.urgency,
+      trend: decisionData.trend,
+      distance_from_low: decisionData.distanceFromLow,
+      extra_cost: decisionData.extraCost,
+      coverage_ratio: decisionData.coverageRatio,
+      validation_ratio: decisionData.validationRatio,
+      analytics_reference_date: chart.analytics_reference_date || null,
+      live_price_source: livePrice.retail_price_source || "modeled_spot_multiplier",
+      live_price_model_version:
+        livePrice.retail_price_model_version || "spot_multiplier_v1",
     },
     chart,
     payment_trend: paymentTrend,

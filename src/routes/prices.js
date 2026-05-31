@@ -39,7 +39,6 @@ router.get("/prices", async (request, response, next) => {
 
 router.post("/prices/fetch", async (request, response, next) => {
   try {
-    const latest = await fetchLatestGoldPrice(request.user.id, request.user.city);
     const summary = await getDashboardSummary(
       request.user.id,
       new Date(),
@@ -47,8 +46,8 @@ router.post("/prices/fetch", async (request, response, next) => {
     );
 
     response.json({
-      message: "Prices are served from stored market data only",
-      price: latest.is_live_available ? latest : null,
+      message: "Dashboard refreshed from stored market data",
+      price: summary.live_price?.is_live_available ? summary.live_price : null,
       decision: summary.decision,
       dashboard: summary,
     });

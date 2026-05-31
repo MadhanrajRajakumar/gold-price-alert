@@ -89,7 +89,7 @@ router.post("/refresh-price", async (request, response, next) => {
     if (!refreshedPrice.is_live_available) {
       response.status(503).json({
         success: false,
-        error: refreshedPrice.live_error || "Unable to fetch live data",
+        error: refreshedPrice.live_error || "Stored market data is unavailable",
         response_time_ms: refreshedPrice.response_time_ms,
       });
       return;

@@ -3,6 +3,7 @@ const { validateEnv } = require("../config/env");
 const {
   aggregateDailySummary,
   backfillHistory,
+  dailyMarketDataCron,
   ensureMarketDataConsistency,
   ingestRealtimeSnapshot,
   getLatestStoredPrice,
@@ -24,6 +25,12 @@ async function runRealtimeIngestionJob() {
     retail_price_source: snapshot.retail_price_source,
   });
   return snapshot;
+}
+
+async function runDailyMarketDataJob(referenceDate = new Date()) {
+  const result = await dailyMarketDataCron(referenceDate);
+  console.log("[gold-price-alert] daily market-data cron completed", result);
+  return result;
 }
 
 async function runDailyAggregationJob(referenceDate = new Date()) {
@@ -79,12 +86,12 @@ function startScheduler() {
   }
 
   cron.schedule(
-    "*/30 * * * *",
+    "0 8 * * *",
     async () => {
       try {
-        await runRealtimeIngestionJob();
+        await runDailyMarketDataJob();
       } catch (error) {
-        console.error("[gold-price-alert] Realtime ingestion job failed:", error);
+        console.error("[gold-price-alert] Daily market-data cron failed:", error);
       }
     },
     { timezone: ALERT_TIMEZONE },
@@ -137,6 +144,7 @@ function startScheduler() {
 
 module.exports = {
   runDailyAggregationJob,
+  runDailyMarketDataJob,
   runDailyPriceJob,
   runDailyValidationJob,
   runRealtimeIngestionJob,

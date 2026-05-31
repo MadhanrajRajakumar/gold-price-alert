@@ -261,12 +261,10 @@ function formatRangePlacement(rangePercent) {
 
 function getGuidanceModel(dashboard) {
   const live = dashboard?.live_price || {};
-  const meta = dashboard?.decision?.decision_meta || {};
+  const meta = dashboard?.advanced_insights || dashboard?.decision?.decision_meta || {};
   const decision = getDecisionPresentation(dashboard);
   const confidence = Number(dashboard?.decision?.confidence ?? 0);
   const rangePosition = getDisplayRangePosition(meta);
-  const prediction = meta?.prediction_3d;
-  const predictionDirection = getPredictionDirection(prediction);
   const daysLeft = Number(meta?.days_left ?? dashboard?.paymentWindow?.daysLeft ?? 30);
   const livePrice = getNumber(
     live?.display_price_value ?? live?.primary_price_inr_per_gram,
@@ -277,151 +275,65 @@ function getGuidanceModel(dashboard) {
 
   if (!isLiveAvailable) {
     return {
-      zoneLabel: "Check back soon",
+      zoneLabel: "Unavailable",
       tone: "hold",
       confidence,
       shortReason: live?.live_error || "Live pricing is unavailable right now.",
-      actionWindow: "Refresh price later today",
-      actionButton: "Refresh price",
+      actionWindow: "Check again later today",
+      actionButton: "Refresh dashboard",
       actionType: "refresh",
-      urgencyLabel: "Low urgency",
-      summaryLabel: "Live price unavailable",
-      chartInsight: "Historical trend is still available below.",
-      whyItems: [
-        "The latest live price could not be loaded.",
-        "The chart still shows recent price direction.",
-        "Refresh later before deciding to buy.",
-      ],
+      recommendationLabel: "Check back soon",
+      chartInsight: "Recent history is still available below.",
     };
   }
 
-  let zoneLabel = "Average zone";
-  if (rangePosition !== null) {
-    if (decision.headline === "BUY" && rangePosition <= 0.14) {
-      zoneLabel = "Excellent buying zone";
-    } else if (decision.headline === "BUY" || rangePosition <= 0.28) {
-      zoneLabel = "Good buying zone";
-    } else if (decision.headline === "WAIT" && rangePosition >= 0.76) {
-      zoneLabel = "Wait for better entry";
-    } else if (rangePosition >= 0.62) {
-      zoneLabel = "Expensive zone";
-    }
-  } else if (decision.headline === "BUY") {
-    zoneLabel = "Good buying zone";
-  } else if (decision.headline === "WAIT") {
-    zoneLabel = "Wait for better entry";
-  }
+  const rangePercent = rangePosition === null ? null : Math.round(rangePosition * 100);
+  const tone =
+    decision.headline === "BUY" ? "buy" : decision.headline === "WAIT" ? "wait" : "hold";
+  const recommendationLabel =
+    decision.headline === "BUY"
+      ? "Buy"
+      : decision.headline === "WAIT"
+        ? "Wait"
+        : "Hold";
+  let shortReason = "Price is sitting near the middle of the monthly range.";
+  let actionWindow = "Wait and review again in a few days";
+  let actionButton = "Mark as bought";
+  let actionType = "mark-bought";
 
-  const tone = getGuidanceTone(zoneLabel);
-  let shortReason = "Prices are sitting in the middle of the recent range.";
-  let actionWindow = "Wait 2 to 3 days and recheck";
-  let actionButton = "Set reminder";
-  let actionType = "settings";
-
-  if (zoneLabel === "Excellent buying zone") {
+  if (decision.headline === "BUY") {
     shortReason =
-      "Price is very close to the lower end of the monthly range and downside looks limited.";
-    actionWindow =
-      daysLeft > 0 && daysLeft <= 3
-        ? `Buy within the next ${daysLeft} day${daysLeft === 1 ? "" : "s"}`
-        : "Buy within 1 to 3 days";
-    actionButton = "Mark when you buy";
-    actionType = "mark-bought";
-  } else if (zoneLabel === "Good buying zone") {
-    shortReason =
-      "Price is near the lower part of the monthly range, so waiting may not improve the price much.";
+      rangePercent === null
+        ? "Price is near the lower end of the monthly range."
+        : `Price is in the lower ${rangePercent}% of the monthly range.`;
     actionWindow =
       daysLeft > 0 && daysLeft <= 5
-        ? `Buy within the next ${daysLeft} day${daysLeft === 1 ? "" : "s"}`
-        : "Buy within 3 to 5 days";
-    actionButton = "Mark when you buy";
-    actionType = "mark-bought";
-  } else if (zoneLabel === "Average zone") {
+        ? `Buy within ${daysLeft} day${daysLeft === 1 ? "" : "s"}`
+        : "Buy soon if your purchase is planned";
+  } else if (decision.headline === "WAIT") {
     shortReason =
-      "This is a fair zone, but there may still be room for a slightly better entry.";
-    actionWindow = "Wait 2 to 3 days and recheck";
-    actionButton = "Set reminder";
-  } else if (zoneLabel === "Expensive zone") {
-    shortReason =
-      "Price is in the upper part of the recent range, so patience may help you avoid overpaying.";
-    actionWindow = "Wait 3 to 5 days and recheck";
-    actionButton = "Set reminder";
-  } else if (zoneLabel === "Wait for better entry") {
-    shortReason =
-      "Price is still elevated compared with recent lows, so waiting is the safer move.";
-    actionWindow = "Wait and recheck in 3 to 5 days";
-    actionButton = "Set reminder";
-  }
-
-  if (decision.headline === "BUY" && predictionDirection.includes("lower")) {
-    shortReason =
-      "Price is still near the lower end of the range, and any near-term downside looks limited.";
-  } else if (
-    (zoneLabel === "Expensive zone" || zoneLabel === "Wait for better entry") &&
-    predictionDirection.includes("higher")
-  ) {
-    shortReason =
-      "Price is already elevated, and recent movement does not yet point to a better entry.";
-  }
-
-  const whyItems = [];
-  if (rangePosition !== null) {
-    if (rangePosition <= 0.2) {
-      whyItems.push("Price is close to the lower end of the recent monthly range.");
-    } else if (rangePosition >= 0.8) {
-      whyItems.push("Price is close to the upper end of the recent monthly range.");
-    } else {
-      whyItems.push("Price is sitting around the middle of the recent monthly range.");
-    }
-  }
-
-  if (predictionDirection) {
-    if (predictionDirection.includes("lower")) {
-      whyItems.push("Near-term movement still leaves room for a slightly lower price.");
-    } else if (predictionDirection.includes("higher")) {
-      whyItems.push("Recent movement suggests prices may hold steady or drift a little higher.");
-    } else {
-      whyItems.push("Recent movement looks stable rather than sharply moving in either direction.");
-    }
-  }
-
-  if (daysLeft > 0 && daysLeft <= 5) {
-    whyItems.push(
-      `Your next buying window is already close, so delaying too long could reduce flexibility.`,
-    );
+      rangePercent === null
+        ? "Price is elevated versus the monthly range."
+        : `Price is in the upper ${100 - rangePercent}% from the top of the monthly range.`;
+    actionWindow = "Wait and review again in 3 to 5 days";
   } else if (distanceFromLow !== null) {
-    whyItems.push(
-      `${formatCurrency(distanceFromLow)} separates today's signal price from the recent low.`,
-    );
+    shortReason = `${formatCurrency(distanceFromLow)} above the monthly low.`;
+    actionWindow = "No rush. Recheck after the next update";
   }
-
-  while (whyItems.length < 3) {
-    whyItems.push("The recommendation is based on recent monthly range position and price behavior.");
-  }
-
-  const rangePercent =
-    rangePosition === null ? null : Math.round(rangePosition * 100);
 
   return {
-    zoneLabel,
+    zoneLabel: recommendationLabel,
     tone,
     confidence,
     shortReason,
     actionWindow,
     actionButton,
     actionType,
-    urgencyLabel:
-      tone === "buy"
-        ? "Act soon"
-        : tone === "wait"
-          ? "Low urgency"
-          : "Moderate urgency",
-    summaryLabel: formatRangePlacement(rangePercent),
+    recommendationLabel,
     chartInsight:
       rangePercent === null
         ? "Recent chart shows where prices have been moving."
-        : `Current price sits in the lower ${rangePercent}% of the recent range.`,
-    whyItems: whyItems.slice(0, 3),
+        : `Current price sits in the ${rangePercent <= 50 ? "lower" : "upper"} ${rangePercent <= 50 ? rangePercent : 100 - rangePercent}% of the recent range.`,
   };
 }
 
@@ -668,16 +580,12 @@ function buildDashboardHtml({
   liveAvailable,
   priceLabel,
   chartInsight,
-  rangePercent,
-  daysLeft,
   secondaryPriceText,
-  prediction,
-  predictionDirection,
-  signalBasis,
-  displayBasis,
-  dataPoints,
   lowDate,
   highDate,
+  monthlyLow,
+  monthlyHigh,
+  advancedInsights,
 }) {
   return `
     <main class="screen">
@@ -685,116 +593,60 @@ function buildDashboardHtml({
         <header class="topbar">
           <div class="brand">
             <p class="eyebrow">Gold Price Alert</p>
-            <h1 class="title">Should you buy today or wait?</h1>
+            <h1 class="title">Buy timing, simplified.</h1>
             <p class="subtitle">${escapeHtml(
               liveAvailable
                 ? `${dashboard.user.city} 22K guidance for ${dashboard.user.email}`
-                : "Live pricing is offline, but recent trend history is still available.",
+                : "Live pricing is offline, but recent history is still available.",
             )}</p>
           </div>
           <div class="topbar-actions">
-            <button id="refreshPriceBtn" type="button" class="primary-button">Refresh Price</button>
+            <button id="refreshPriceBtn" type="button" class="ghost-button">Refresh</button>
             <button id="openSettings" type="button" class="ghost-button">Settings</button>
           </div>
         </header>
 
         <section class="card hero-card panel ${guidance.tone}">
-          <div class="hero-layout">
-            <div class="hero-copy">
-              <p class="hero-kicker">Today's recommendation</p>
-              <h2 class="hero-title">${escapeHtml(guidance.zoneLabel)}</h2>
-              <div class="hero-price-block">
-                <strong class="hero-price">${escapeHtml(
-                  liveAvailable
-                    ? formatCurrency(live.primary_price_inr_per_gram)
-                    : live?.live_error || "Live data unavailable",
-                )}</strong>
-                <p class="hero-price-label">${escapeHtml(priceLabel)}</p>
-              </div>
-              <div class="hero-meta">
-                <span class="confidence-pill">${escapeHtml(guidance.confidence)}% confidence</span>
-                <span class="hero-update">${escapeHtml(
-                  live.freshness_label || "Update time unavailable",
-                )}</span>
-              </div>
-              <p class="hero-summary">${escapeHtml(guidance.shortReason)}</p>
-              <div class="hero-action-row">
-                <div class="action-window-box">
-                  <span>Suggested action</span>
-                  <strong>${escapeHtml(guidance.actionWindow)}</strong>
-                </div>
-                <button
-                  id="primaryActionBtn"
-                  type="button"
-                  class="primary-button"
-                  data-guidance-action="${escapeHtml(guidance.actionType)}"
-                >
-                  ${escapeHtml(guidance.actionButton)}
-                </button>
-              </div>
+          <div class="hero-copy">
+            <p class="hero-kicker">Recommendation</p>
+            <h2 class="hero-title">${escapeHtml(guidance.recommendationLabel)}</h2>
+            <div class="hero-price-block">
+              <strong class="hero-price">${escapeHtml(
+                liveAvailable
+                  ? formatCurrency(live.primary_price_inr_per_gram)
+                  : live?.live_error || "Live data unavailable",
+              )}</strong>
+              <p class="hero-price-label">${escapeHtml(priceLabel)}</p>
             </div>
-
-            <div class="hero-aside">
-              <div class="hero-aside-card">
-                <span class="meta-label">Current view</span>
-                <strong>${escapeHtml(guidance.summaryLabel)}</strong>
-                <p>${escapeHtml(chartInsight)}</p>
+            <div class="hero-meta">
+              <span class="confidence-pill">${escapeHtml(guidance.confidence)}% confidence</span>
+              <span class="hero-update">${escapeHtml(
+                live.freshness_label || "Update time unavailable",
+              )}</span>
+            </div>
+            <p class="hero-summary">${escapeHtml(guidance.shortReason)}</p>
+            <div class="hero-action-row">
+              <div class="action-window-box">
+                <span>Suggested action</span>
+                <strong>${escapeHtml(guidance.actionWindow)}</strong>
               </div>
-              <div class="hero-aside-card">
-                <span class="meta-label">Buying window</span>
-                <strong>${escapeHtml(guidance.urgencyLabel)}</strong>
-                <p>${escapeHtml(daysLeft.meta)}</p>
-              </div>
-              ${
-                secondaryPriceText
-                  ? `<div class="hero-aside-card subtle">
-                      <span class="meta-label">Reference price</span>
-                      <strong>${escapeHtml(secondaryPriceText)}</strong>
-                      <p>Used in the background for trend and signal tracking.</p>
-                    </div>`
-                  : ""
-              }
+              <button
+                id="markBoughtBtn"
+                type="button"
+                class="primary-button"
+                data-mark-bought="true"
+              >
+                Mark as Bought
+              </button>
             </div>
           </div>
-        </section>
-
-        <section class="info-grid">
-          <article class="card panel info-card">
-            <div class="section-heading">
-              <p class="eyebrow">Why this call</p>
-              <h3>Why the app says this</h3>
-            </div>
-            <ul class="explanation-list">
-              ${guidance.whyItems
-                .map((item) => `<li>${escapeHtml(item)}</li>`)
-                .join("")}
-            </ul>
-          </article>
-
-          <article class="card panel info-card action-card">
-            <div class="section-heading">
-              <p class="eyebrow">What to do next</p>
-              <h3>${escapeHtml(guidance.actionWindow)}</h3>
-            </div>
-            <p class="action-summary">${escapeHtml(guidance.shortReason)}</p>
-            <div class="action-chip-row">
-              <span class="info-chip">${escapeHtml(guidance.confidence)}% confidence</span>
-              <span class="info-chip">${escapeHtml(guidance.urgencyLabel)}</span>
-            </div>
-            <p class="meta">
-              ${escapeHtml(
-                live.delayed_message ||
-                  "Use the chart below to confirm whether prices are sitting low or high right now.",
-              )}
-            </p>
-          </article>
         </section>
 
         <section class="card chart-card">
           <div class="chart-header">
             <div>
               <p class="eyebrow">Recent trend</p>
-              <h3>Are prices low right now?</h3>
+              <h3>Trend chart</h3>
               <p class="chart-support">${escapeHtml(chartInsight)}</p>
             </div>
             <div class="range-selector">
@@ -811,98 +663,82 @@ function buildDashboardHtml({
           <div class="chart-wrap">
             <canvas id="goldChart" aria-label="Gold spot price chart"></canvas>
           </div>
-          <div class="chart-legend">
-            <span class="legend-item buy-zone">Lower price zone</span>
-            <span class="legend-item current-zone">Current price</span>
-            <span class="legend-item risk-zone">Higher price zone</span>
-          </div>
           <p class="meta" id="chartMeta"></p>
+        </section>
+
+        <section class="monthly-summary-grid">
+          <article class="card stat-card panel">
+            <p class="stat-label">Monthly low</p>
+            <div class="stat-value">${escapeHtml(formatCurrency(monthlyLow))}</div>
+            <p class="meta">${escapeHtml(lowDate)}</p>
+          </article>
+          <article class="card stat-card panel">
+            <p class="stat-label">Monthly high</p>
+            <div class="stat-value">${escapeHtml(formatCurrency(monthlyHigh))}</div>
+            <p class="meta">${escapeHtml(highDate)}</p>
+          </article>
         </section>
 
         <section class="advanced-section">
           <details class="card advanced-card">
             <summary>
               <div>
-                <p class="eyebrow">Advanced details</p>
-                <h3>Signal inputs and deeper context</h3>
+                <p class="eyebrow">Advanced Insights</p>
+                <h3>Technical detail</h3>
               </div>
               <span class="summary-hint">Show details</span>
             </summary>
 
             <div class="advanced-grid">
               <article class="card stat-card panel">
-                <p class="stat-label">${getRangeLabel(state.selectedRange)} low</p>
-                <div class="stat-value">${escapeHtml(formatCurrency(dashboard.chart.lowest?.spot_24k_inr_per_gram))}</div>
-                <p class="meta">${escapeHtml(lowDate)}</p>
-              </article>
-
-              <article class="card stat-card panel">
-                <p class="stat-label">${getRangeLabel(state.selectedRange)} high</p>
-                <div class="stat-value">${escapeHtml(formatCurrency(dashboard.chart.highest?.spot_24k_inr_per_gram))}</div>
-                <p class="meta">${escapeHtml(highDate)}</p>
-              </article>
-
-              <article class="card stat-card panel">
-                <p class="stat-label">Buy cycle</p>
-                <div class="cycle-info">
-                  ${
-                    dashboard.paymentWindow?.lastPaymentDate
-                      ? `<p class="info-line">Last purchased: ${escapeHtml(formatDateLabel(dashboard.paymentWindow.lastPaymentDate))}</p>`
-                      : `<p class="info-line">Not yet purchased</p>`
-                  }
-                  ${
-                    dashboard.paymentWindow?.nextCycleDate
-                      ? `<p class="info-line">Next available: ${escapeHtml(formatDateLabel(dashboard.paymentWindow.nextCycleDate))}</p>`
-                      : `<p class="info-line">Next available: Anytime</p>`
-                  }
-                  <p class="info-line">${escapeHtml(daysLeft.meta)}</p>
-                </div>
-                <button
-                  id="markBoughtBtn"
-                  type="button"
-                  class="ghost-button full-width"
-                  data-mark-bought="true"
-                >
-                  Mark as bought
-                </button>
-              </article>
-
-              <article class="card stat-card panel">
-                <p class="stat-label">3-day outlook</p>
-                <div class="stat-value">${escapeHtml(
-                  prediction?.expected ? formatCurrency(prediction.expected) : "-",
-                )}</div>
-                <p class="meta">${escapeHtml(
-                  prediction
-                    ? `${predictionDirection}. Range ${formatCurrency(prediction.min)} to ${formatCurrency(prediction.max)}.`
-                    : "No short-term outlook available.",
-                )}</p>
-              </article>
-
-              <article class="card stat-card panel technical-card">
-                <p class="stat-label">Decision basis</p>
+                <p class="stat-label">Signal basis</p>
                 <div class="technical-copy">
-                  <p>Signal basis: ${escapeHtml(signalBasis)}</p>
-                  <p>Display basis: ${escapeHtml(displayBasis)}</p>
-                  <p>Data points reviewed: ${escapeHtml(String(dataPoints))}</p>
-                  <p>Range position: ${escapeHtml(rangePercent === null ? "-" : `${rangePercent}%`)}</p>
+                  <p>${escapeHtml(advancedInsights.signal_basis || "-")}</p>
+                  <p>Display: ${escapeHtml(advancedInsights.display_basis || "-")}</p>
+                </div>
+              </article>
+
+              <article class="card stat-card panel">
+                <p class="stat-label">Data quality</p>
+                <div class="technical-copy">
+                  <p>Coverage: ${escapeHtml(`${Math.round((advancedInsights.coverage_ratio || 0) * 100)}%`)}</p>
+                  <p>Validated: ${escapeHtml(`${Math.round((advancedInsights.validation_ratio || 0) * 100)}%`)}</p>
+                  <p>Points reviewed: ${escapeHtml(String(advancedInsights.data_points_reviewed || 0))}</p>
+                </div>
+              </article>
+
+              <article class="card stat-card panel">
+                <p class="stat-label">Price context</p>
+                <div class="technical-copy">
+                  <p>${escapeHtml(chartInsight)}</p>
+                  ${
+                    secondaryPriceText
+                      ? `<p>Reference: ${escapeHtml(secondaryPriceText)}</p>`
+                      : ""
+                  }
+                </div>
+              </article>
+
+              <article class="card stat-card panel">
+                <div class="technical-copy">
+                  <p>Updated: ${escapeHtml(advancedInsights.freshness_label || "Unavailable")}</p>
+                  <p>Range position: ${escapeHtml(
+                    advancedInsights.display_range_position === null ||
+                      advancedInsights.display_range_position === undefined
+                      ? "-"
+                      : `${Math.round(Number(advancedInsights.display_range_position) * 100)}%`,
+                  )}</p>
+                  <p>Distance from low: ${escapeHtml(
+                    advancedInsights.distance_from_low === null ||
+                      advancedInsights.distance_from_low === undefined
+                      ? "-"
+                      : formatCurrency(advancedInsights.distance_from_low),
+                  )}</p>
                 </div>
               </article>
             </div>
           </details>
         </section>
-
-        <div class="mobile-sticky-bar">
-          <button
-            id="mobilePrimaryActionBtn"
-            type="button"
-            class="primary-button full-width"
-            data-guidance-action="${escapeHtml(guidance.actionType)}"
-          >
-            ${escapeHtml(guidance.actionButton)}
-          </button>
-          <p class="mobile-sticky-note">${escapeHtml(guidance.actionWindow)}</p>
-        </div>
 
         <section class="dashboard-footnote">
           <p class="meta">
@@ -924,30 +760,21 @@ function renderDashboard() {
   const dashboard = state.dashboard;
   const live = dashboard.live_price || {};
   const guidance = getGuidanceModel(dashboard);
-  const meta = dashboard?.decision?.decision_meta;
-  const prediction = dashboard?.decision?.decision_meta?.prediction_3d;
-  const predictionDirection = getPredictionDirection(prediction);
-  const daysLeft = getDaysLeftCard(dashboard.paymentWindow, dashboard.paymentWarning);
+  const advancedInsights = dashboard?.advanced_insights || {};
   const liveAvailable = live?.is_live_available === true;
-  const rangePosition = getDisplayRangePosition(meta);
-  const rangePercent = rangePosition === null ? null : Math.round(rangePosition * 100);
-  const signalBasis = meta?.signal_basis || "spot_24k_inr_per_gram";
-  const displayBasis = meta?.display_basis || "retail_22k_inr_per_gram";
   const secondaryPriceText =
     liveAvailable && live.secondary_price_inr_per_gram
       ? `${live.secondary_price_label || "Spot 24K"} ${formatCurrency(live.secondary_price_inr_per_gram)}`
       : "";
   const priceLabel =
     live.primary_price_label || `${dashboard.user.city || "Chennai"} 22K`;
-  const dataPoints = Number(meta?.data_points || dashboard.chart?.points?.length || 0);
-  const lowDate = dashboard.chart.lowest ? formatDateLabel(dashboard.chart.lowest.date) : "No data";
-  const highDate = dashboard.chart.highest ? formatDateLabel(dashboard.chart.highest.date) : "No data";
-  const chartInsight =
-    rangePercent === null
-      ? guidance.chartInsight
-      : rangePercent <= 50
-        ? `Current price sits in the lower ${rangePercent}% of the recent range.`
-        : `Current price sits in the upper ${100 - rangePercent}% of the recent range.`;
+  const lowDate = dashboard.monthly_summary?.low_date
+    ? formatDateLabel(dashboard.monthly_summary.low_date)
+    : "No data";
+  const highDate = dashboard.monthly_summary?.high_date
+    ? formatDateLabel(dashboard.monthly_summary.high_date)
+    : "No data";
+  const chartInsight = guidance.chartInsight;
 
   app.innerHTML = buildDashboardHtml({
     dashboard,
@@ -956,16 +783,18 @@ function renderDashboard() {
     liveAvailable,
     priceLabel,
     chartInsight,
-    rangePercent,
-    daysLeft,
     secondaryPriceText,
-    prediction,
-    predictionDirection,
-    signalBasis,
-    displayBasis,
-    dataPoints,
     lowDate,
     highDate,
+    monthlyLow:
+      dashboard.monthly_summary?.low_price ??
+      dashboard.chart.lowest?.retail_22k_inr_per_gram ??
+      dashboard.chart.lowest?.display_price_value,
+    monthlyHigh:
+      dashboard.monthly_summary?.high_price ??
+      dashboard.chart.highest?.retail_22k_inr_per_gram ??
+      dashboard.chart.highest?.display_price_value,
+    advancedInsights,
   });
 
   attachDashboardEvents();
@@ -1185,8 +1014,8 @@ function renderChart() {
 
   const context = canvas.getContext("2d");
   const gradient = context.createLinearGradient(0, 0, 0, 220);
-  gradient.addColorStop(0, "rgba(212, 175, 55, 0.28)");
-  gradient.addColorStop(1, "rgba(212, 175, 55, 0.02)");
+  gradient.addColorStop(0, "rgba(37, 211, 102, 0.18)");
+  gradient.addColorStop(1, "rgba(37, 211, 102, 0.01)");
 
   const points = state.dashboard.chart.points;
   const lowestDate = state.dashboard.chart.lowest?.date;
@@ -1217,9 +1046,9 @@ function renderChart() {
       const upperY = scales.y.getPixelForValue(upperBandStart);
 
       ctx.save();
-      ctx.fillStyle = "rgba(34, 197, 94, 0.08)";
+      ctx.fillStyle = "rgba(22, 163, 74, 0.08)";
       ctx.fillRect(chartArea.left, lowerY, chartArea.right - chartArea.left, chartArea.bottom - lowerY);
-      ctx.fillStyle = "rgba(239, 68, 68, 0.08)";
+      ctx.fillStyle = "rgba(245, 158, 11, 0.08)";
       ctx.fillRect(chartArea.left, chartArea.top, chartArea.right - chartArea.left, upperY - chartArea.top);
       ctx.restore();
     },
@@ -1233,7 +1062,7 @@ function renderChart() {
       datasets: [
         {
           data: points.map((point) => Number(point.spot_24k_inr_per_gram)),
-          borderColor: "#D4AF37",
+          borderColor: "#25D366",
           backgroundColor: gradient,
           tension: 0.4,
           fill: true,
@@ -1288,7 +1117,7 @@ function renderChart() {
         tooltip: {
           enabled: true,
           backgroundColor: "#121826",
-          borderColor: "rgba(212, 175, 55, 0.22)",
+          borderColor: "rgba(37, 211, 102, 0.2)",
           borderWidth: 1,
           titleColor: "#E5E7EB",
           bodyColor: "#E5E7EB",
@@ -1327,7 +1156,7 @@ function renderChart() {
   if (chartMeta) {
     chartMeta.textContent = `Low ${formatCurrency(
       state.dashboard.chart.lowest?.spot_24k_inr_per_gram,
-    )} - High ${formatCurrency(state.dashboard.chart.highest?.spot_24k_inr_per_gram)} - Trend view uses recent spot history`;
+    )} - High ${formatCurrency(state.dashboard.chart.highest?.spot_24k_inr_per_gram)} - Trend uses stored spot history`;
   }
 }
 
@@ -1522,7 +1351,7 @@ async function refreshPrice() {
       throw new Error(response.error || "Failed to refresh price");
     }
 
-    state.flashMessage = `Price refreshed in ${response.response_time_ms} ms.`;
+    state.flashMessage = `Dashboard refreshed from stored market data in ${response.response_time_ms} ms.`;
     state.flashType = "success";
     await loadDashboard(state.selectedRange);
     renderApp();
