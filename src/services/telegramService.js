@@ -72,6 +72,36 @@ async function sendTelegramMessage(chatId, text) {
   }
 }
 
+async function verifyTelegramConnection(userId, telegramChatId) {
+  if (!telegramChatId) {
+    const error = new Error("telegram_chat_id is required");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  return prisma.user.update({
+    where: { id: userId },
+    data: {
+      telegram_chat_id: String(telegramChatId),
+      telegram_verified: true,
+    },
+  });
+}
+
+async function markTelegramDisconnected(userId, reason = "disconnected") {
+  await logActivity(userId, "telegram_disconnected", {
+    reason,
+    disconnected_at: new Date().toISOString(),
+  });
+
+  return prisma.user.update({
+    where: { id: userId },
+    data: {
+      telegram_verified: false,
+    },
+  });
+}
+
 
 
 let lastUpdateId = 0;
@@ -145,6 +175,8 @@ function startTelegramListener() {
 }
 
 module.exports = {
+  markTelegramDisconnected,
   sendTelegramMessage,
   startTelegramListener,
+  verifyTelegramConnection,
 };

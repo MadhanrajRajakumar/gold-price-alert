@@ -4,9 +4,14 @@
   "description": "Simple MVP for tracking daily gold prices and checking 30-day lows.",
   "main": "api/index.js",
   "scripts": {
+    "audit:market-data": "node src/scripts/auditMarketData.js",
     "build": "prisma generate",
+    "backfill:gold": "node src/scripts/backfillGoldHistory.js",
+    "backfill:gold:force": "node src/scripts/backfillGoldHistory.js --force",
     "postinstall": "prisma generate",
-    "prisma:generate": "prisma generate"
+    "prisma:generate": "prisma generate",
+    "prisma:validate": "prisma validate",
+    "test": "node --test"
   },
   "keywords": [],
   "author": "",

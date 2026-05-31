@@ -98,6 +98,17 @@ function buildFlashHtml(message, type) {
   return `<p class="flash ${type || ""}">${escapeHtml(message || "")}</p>`;
 }
 
+function getRangeLabel(range) {
+  const rangeLabels = {
+    "1W": "1-week spot",
+    "1M": "1-month spot",
+    "3M": "3-month spot",
+    "6M": "6-month spot",
+    "1Y": "1-year spot",
+  };
+  return rangeLabels[range] || "spot";
+}
+
 async function requestJson(url, options) {
   const response = await fetch(url, {
     credentials: "same-origin",
@@ -129,43 +140,6 @@ function destroyChart() {
   }
 }
 
-function getPriceChangeMetrics(dashboard) {
-  const livePrice = dashboard?.live_price?.price_per_gram;
-  const meta = dashboard?.decision?.decision_meta;
-  const lowestPrice = Number(meta?.lowest_price);
-  const highestPrice = Number(meta?.highest_price);
-  const hasRange =
-    Number.isFinite(lowestPrice) &&
-    Number.isFinite(highestPrice) &&
-    highestPrice >= lowestPrice;
-
-  if (hasRange) {
-    const midpoint = (lowestPrice + highestPrice) / 2;
-    const delta = Number(livePrice) - midpoint;
-    const className = delta < 0 ? "positive" : delta > 0 ? "negative" : "";
-    const rangePosition = Number(meta?.range_position);
-    let label = "Within billing-cycle range";
-
-    if (Number.isFinite(rangePosition)) {
-      if (rangePosition <= 0.2) {
-        label = "Near billing-cycle low";
-      } else if (rangePosition >= 0.8) {
-        label = "Near billing-cycle high";
-      } else {
-        label = "Mid billing-cycle range";
-      }
-    }
-
-    return { delta, label, className };
-  }
-
-  return {
-    delta: null,
-    label: livePrice ? "Cycle range unavailable" : "No historical data available",
-    className: "",
-  };
-}
-
 function getDecisionPresentation(dashboard) {
   const label = dashboard?.decision?.decision || dashboard?.decision?.label || "WAIT";
   const confidence = dashboard?.decision?.confidence ?? 50;
@@ -182,9 +156,6 @@ function getDecisionPresentation(dashboard) {
   if (lower.includes("buy") || lower.includes("pay")) {
     headline = "BUY";
     tone = "buy";
-  } else if (lower.includes("overdue")) {
-    headline = "ACT NOW";
-    tone = "overdue";
   }
 
   return {
@@ -196,28 +167,8 @@ function getDecisionPresentation(dashboard) {
 }
 
 function getDecisionSupport(dashboard) {
-  const live = dashboard?.live_price;
-  const hasLivePrice = Boolean(live?.price_per_gram);
-  const meta = dashboard?.decision?.decision_meta;
-  const headline = getDecisionPresentation(dashboard).headline;
-
-  if (!hasLivePrice) {
-    return live?.live_error || "Live data unavailable";
-  }
-
-  if (!meta) {
-    return "No decision data available";
-  }
-
-  const daysLeft = meta.days_left;
-  const dayLabel = `${daysLeft} day${daysLeft === 1 ? "" : "s"} left`;
-  const dataPoints = Number(meta.data_points || 0);
-
-  if (headline === "BUY") {
-    return `You missed the lowest - waiting may not help much now.\n${dayLabel} - waiting is risky.\nBased on ${dataPoints} days of price data.`;
-  }
-
-  return `Price may drop further.\n${dayLabel} - waiting is safer.`;
+  const guidance = getGuidanceModel(dashboard);
+  return guidance.shortReason;
 }
 
 function getPredictionDirection(prediction) {
@@ -243,24 +194,183 @@ function getPredictionDirection(prediction) {
   return "Likely stable to slightly lower";
 }
 
-function getDaysLeftCard(paymentWindow, paymentWarning) {
-  if (!paymentWindow) {
+function normalizeRangeValue(range) {
+  const normalized = String(range || "").trim();
+  const lookup = {
+    "1w": "1W",
+    "1m": "1M",
+    "3m": "3M",
+    "6m": "6M",
+    "1y": "1Y",
+    "1W": "1W",
+    "1M": "1M",
+    "3M": "3M",
+    "6M": "6M",
+    "1Y": "1Y",
+  };
+
+  return lookup[normalized] || normalized || "1M";
+}
+
+function getNumber(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function getDisplayRangePosition(meta) {
+  const displayRangePosition = getNumber(meta?.display_range_position);
+  if (displayRangePosition !== null) {
+    return Math.max(0, Math.min(1, displayRangePosition));
+  }
+
+  const rangePosition = getNumber(meta?.range_position);
+  if (rangePosition !== null) {
+    return Math.max(0, Math.min(1, rangePosition));
+  }
+
+  return null;
+}
+
+function getGuidanceTone(zoneLabel) {
+  if (zoneLabel === "Excellent buying zone" || zoneLabel === "Good buying zone") {
+    return "buy";
+  }
+
+  if (zoneLabel === "Wait for better entry" || zoneLabel === "Expensive zone") {
+    return "wait";
+  }
+
+  return "hold";
+}
+
+function formatRangePlacement(rangePercent) {
+  if (rangePercent === null) {
+    return "Recent range";
+  }
+
+  if (rangePercent <= 33) {
+    return `Lower ${rangePercent}% of range`;
+  }
+
+  if (rangePercent >= 67) {
+    return `Upper ${100 - rangePercent}% from the top`;
+  }
+
+  return "Middle of range";
+}
+
+function getGuidanceModel(dashboard) {
+  const live = dashboard?.live_price || {};
+  const meta = dashboard?.advanced_insights || dashboard?.decision?.decision_meta || {};
+  const decision = getDecisionPresentation(dashboard);
+  const confidence = Number(dashboard?.decision?.confidence ?? 0);
+  const rangePosition = getDisplayRangePosition(meta);
+  const daysLeft = Number(meta?.days_left ?? dashboard?.paymentWindow?.daysLeft ?? 30);
+  const livePrice = getNumber(
+    live?.display_price_value ?? live?.primary_price_inr_per_gram,
+  );
+  const distanceFromLow = getNumber(meta?.distance_from_low);
+  const isLiveAvailable =
+    live?.is_live_available === true && livePrice !== null;
+
+  if (!isLiveAvailable) {
     return {
-      value: "Not set",
-      meta: paymentWarning || "Add your last payment date in settings",
+      zoneLabel: "Unavailable",
+      tone: "hold",
+      confidence,
+      shortReason: live?.live_error || "Live pricing is unavailable right now.",
+      actionWindow: "Check again later today",
+      actionButton: "Refresh dashboard",
+      actionType: "refresh",
+      recommendationLabel: "Check back soon",
+      chartInsight: "Recent history is still available below.",
     };
   }
 
-  if (paymentWindow.isOverdue) {
-    return {
-      value: "Overdue",
-      meta: `Due ${formatDateLabel(paymentWindow.nextDueDate)}`,
-    };
+  const rangePercent = rangePosition === null ? null : Math.round(rangePosition * 100);
+  const tone =
+    decision.headline === "BUY" ? "buy" : decision.headline === "WAIT" ? "wait" : "hold";
+  const recommendationLabel =
+    decision.headline === "BUY"
+      ? "Buy"
+      : decision.headline === "WAIT"
+        ? "Wait"
+        : "Hold";
+  let shortReason = "Price is sitting near the middle of the monthly range.";
+  let actionWindow = "Wait and review again in a few days";
+  let actionButton = "Mark as bought";
+  let actionType = "mark-bought";
+
+  if (decision.headline === "BUY") {
+    shortReason =
+      rangePercent === null
+        ? "Price is near the lower end of the monthly range."
+        : `Price is in the lower ${rangePercent}% of the monthly range.`;
+    actionWindow =
+      daysLeft > 0 && daysLeft <= 5
+        ? `Buy within ${daysLeft} day${daysLeft === 1 ? "" : "s"}`
+        : "Buy soon if your purchase is planned";
+  } else if (decision.headline === "WAIT") {
+    shortReason =
+      rangePercent === null
+        ? "Price is elevated versus the monthly range."
+        : `Price is in the upper ${100 - rangePercent}% from the top of the monthly range.`;
+    actionWindow = "Wait and review again in 3 to 5 days";
+  } else if (distanceFromLow !== null) {
+    shortReason = `${formatCurrency(distanceFromLow)} above the monthly low.`;
+    actionWindow = "No rush. Recheck after the next update";
   }
 
   return {
-    value: String(paymentWindow.daysLeft),
-    meta: `Due ${formatDateLabel(paymentWindow.nextDueDate)}`,
+    zoneLabel: recommendationLabel,
+    tone,
+    confidence,
+    shortReason,
+    actionWindow,
+    actionButton,
+    actionType,
+    recommendationLabel,
+    chartInsight:
+      rangePercent === null
+        ? "Recent chart shows where prices have been moving."
+        : `Current price sits in the ${rangePercent <= 50 ? "lower" : "upper"} ${rangePercent <= 50 ? rangePercent : 100 - rangePercent}% of the recent range.`,
+  };
+}
+
+function getDaysLeftCard(paymentWindow, paymentWarning) {
+  if (!paymentWindow) {
+    return {
+      value: "Start",
+      meta: "Start your first buy cycle",
+    };
+  }
+
+  if (paymentWindow.status === "never") {
+    return {
+      value: "Start",
+      meta: "Start your first buy cycle",
+    };
+  }
+
+  if (paymentWindow.status === "active") {
+    const daysText = paymentWindow.daysLeft === 1 ? "day" : "days";
+    return {
+      value: String(paymentWindow.daysLeft),
+      meta: `Next buy in ${paymentWindow.daysLeft} ${daysText}`,
+    };
+  }
+
+  if (paymentWindow.status === "available") {
+    return {
+      value: "Ready",
+      meta: "You can buy anytime now",
+    };
+  }
+
+  // Default fallback
+  return {
+    value: "Not set",
+    meta: paymentWarning || "Add your last payment date in settings",
   };
 }
 
@@ -463,25 +573,233 @@ function getSettingsHtml(dashboard) {
   `;
 }
 
+function buildDashboardHtml({
+  dashboard,
+  live,
+  guidance,
+  liveAvailable,
+  priceLabel,
+  chartInsight,
+  secondaryPriceText,
+  lowDate,
+  highDate,
+  monthlyLow,
+  monthlyHigh,
+  advancedInsights,
+}) {
+  return `
+    <main class="screen">
+      <div class="shell">
+        <header class="topbar">
+          <div class="brand">
+            <p class="eyebrow">Gold Price Alert</p>
+            <h1 class="title">Buy timing, simplified.</h1>
+            <p class="subtitle">${escapeHtml(
+              liveAvailable
+                ? `${dashboard.user.city} 22K guidance for ${dashboard.user.email}`
+                : "Live pricing is offline, but recent history is still available.",
+            )}</p>
+          </div>
+          <div class="topbar-actions">
+            <button id="refreshPriceBtn" type="button" class="ghost-button">Refresh</button>
+            <button id="openSettings" type="button" class="ghost-button">Settings</button>
+          </div>
+        </header>
+
+        <section class="card hero-card panel ${guidance.tone}">
+          <div class="hero-copy">
+            <p class="hero-kicker">Recommendation</p>
+            <h2 class="hero-title">${escapeHtml(guidance.recommendationLabel)}</h2>
+            <div class="hero-price-block">
+              <strong class="hero-price">${escapeHtml(
+                liveAvailable
+                  ? formatCurrency(live.primary_price_inr_per_gram)
+                  : live?.live_error || "Live data unavailable",
+              )}</strong>
+              <p class="hero-price-label">${escapeHtml(priceLabel)}</p>
+            </div>
+            <div class="hero-meta">
+              <span class="confidence-pill">${escapeHtml(guidance.confidence)}% confidence</span>
+              <span class="hero-update">${escapeHtml(
+                live.freshness_label || "Update time unavailable",
+              )}</span>
+            </div>
+            <p class="hero-summary">${escapeHtml(guidance.shortReason)}</p>
+            <div class="hero-action-row">
+              <div class="action-window-box">
+                <span>Suggested action</span>
+                <strong>${escapeHtml(guidance.actionWindow)}</strong>
+              </div>
+              <button
+                id="markBoughtBtn"
+                type="button"
+                class="primary-button"
+                data-mark-bought="true"
+              >
+                Mark as Bought
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <section class="card chart-card">
+          <div class="chart-header">
+            <div>
+              <p class="eyebrow">Recent trend</p>
+              <h3>Trend chart</h3>
+              <p class="chart-support">${escapeHtml(chartInsight)}</p>
+            </div>
+            <div class="range-selector">
+              ${["1W", "1M", "3M", "6M", "1Y"]
+                .map(
+                  (range) =>
+                    `<button type="button" class="range-button ${
+                      state.selectedRange === range ? "active" : ""
+                    }" data-range="${range}">${range}</button>`,
+                )
+                .join("")}
+            </div>
+          </div>
+          <div class="chart-wrap">
+            <canvas id="goldChart" aria-label="Gold spot price chart"></canvas>
+          </div>
+          <p class="meta" id="chartMeta"></p>
+        </section>
+
+        <section class="monthly-summary-grid">
+          <article class="card stat-card panel">
+            <p class="stat-label">Monthly low</p>
+            <div class="stat-value">${escapeHtml(formatCurrency(monthlyLow))}</div>
+            <p class="meta">${escapeHtml(lowDate)}</p>
+          </article>
+          <article class="card stat-card panel">
+            <p class="stat-label">Monthly high</p>
+            <div class="stat-value">${escapeHtml(formatCurrency(monthlyHigh))}</div>
+            <p class="meta">${escapeHtml(highDate)}</p>
+          </article>
+        </section>
+
+        <section class="advanced-section">
+          <details class="card advanced-card">
+            <summary>
+              <div>
+                <p class="eyebrow">Advanced Insights</p>
+                <h3>Technical detail</h3>
+              </div>
+              <span class="summary-hint">Show details</span>
+            </summary>
+
+            <div class="advanced-grid">
+              <article class="card stat-card panel">
+                <p class="stat-label">Signal basis</p>
+                <div class="technical-copy">
+                  <p>${escapeHtml(advancedInsights.signal_basis || "-")}</p>
+                  <p>Display: ${escapeHtml(advancedInsights.display_basis || "-")}</p>
+                </div>
+              </article>
+
+              <article class="card stat-card panel">
+                <p class="stat-label">Data quality</p>
+                <div class="technical-copy">
+                  <p>Coverage: ${escapeHtml(`${Math.round((advancedInsights.coverage_ratio || 0) * 100)}%`)}</p>
+                  <p>Validated: ${escapeHtml(`${Math.round((advancedInsights.validation_ratio || 0) * 100)}%`)}</p>
+                  <p>Points reviewed: ${escapeHtml(String(advancedInsights.data_points_reviewed || 0))}</p>
+                </div>
+              </article>
+
+              <article class="card stat-card panel">
+                <p class="stat-label">Price context</p>
+                <div class="technical-copy">
+                  <p>${escapeHtml(chartInsight)}</p>
+                  ${
+                    secondaryPriceText
+                      ? `<p>Reference: ${escapeHtml(secondaryPriceText)}</p>`
+                      : ""
+                  }
+                </div>
+              </article>
+
+              <article class="card stat-card panel">
+                <div class="technical-copy">
+                  <p>Updated: ${escapeHtml(advancedInsights.freshness_label || "Unavailable")}</p>
+                  <p>Range position: ${escapeHtml(
+                    advancedInsights.display_range_position === null ||
+                      advancedInsights.display_range_position === undefined
+                      ? "-"
+                      : `${Math.round(Number(advancedInsights.display_range_position) * 100)}%`,
+                  )}</p>
+                  <p>Distance from low: ${escapeHtml(
+                    advancedInsights.distance_from_low === null ||
+                      advancedInsights.distance_from_low === undefined
+                      ? "-"
+                      : formatCurrency(advancedInsights.distance_from_low),
+                  )}</p>
+                </div>
+              </article>
+            </div>
+          </details>
+        </section>
+
+        <section class="dashboard-footnote">
+          <p class="meta">
+            ${escapeHtml(
+              live.live_error ||
+                "The main recommendation uses recent signal history for timing while the headline shows today's Chennai 22K price.",
+            )}
+          </p>
+        </section>
+
+        ${buildFlashHtml(state.flashMessage, state.flashType)}
+      </div>
+      ${state.settingsOpen ? getSettingsHtml(dashboard) : ""}
+    </main>
+  `;
+}
+
 function renderDashboard() {
   const dashboard = state.dashboard;
   const live = dashboard.live_price || {};
-  const priceMetrics = getPriceChangeMetrics(dashboard);
-  const decision = getDecisionPresentation(dashboard);
-  const meta = dashboard?.decision?.decision_meta;
-  const prediction = dashboard?.decision?.decision_meta?.prediction_3d;
-  const dropProbability = dashboard?.decision?.decision_meta?.drop_probability;
-  const premiumPrediction = dashboard?.decision?.decision_meta?.premium_prediction;
-  const isBuyDecision = decision.headline === "BUY";
-  const roundedDistanceFromLow = Math.round(Number(meta?.distance_from_low || 0));
-const confidence = decision.confidence;
-let strength = "";
-if (confidence < 40) strength = "Weak";
-else if (confidence < 70) strength = "Moderate";
-else strength = "Strong";
-  const predictionDirection = getPredictionDirection(prediction);
-  const daysLeft = getDaysLeftCard(dashboard.paymentWindow, dashboard.paymentWarning);
+  const guidance = getGuidanceModel(dashboard);
+  const advancedInsights = dashboard?.advanced_insights || {};
   const liveAvailable = live?.is_live_available === true;
+  const secondaryPriceText =
+    liveAvailable && live.secondary_price_inr_per_gram
+      ? `${live.secondary_price_label || "Spot 24K"} ${formatCurrency(live.secondary_price_inr_per_gram)}`
+      : "";
+  const priceLabel =
+    live.primary_price_label || `${dashboard.user.city || "Chennai"} 22K`;
+  const lowDate = dashboard.monthly_summary?.low_date
+    ? formatDateLabel(dashboard.monthly_summary.low_date)
+    : "No data";
+  const highDate = dashboard.monthly_summary?.high_date
+    ? formatDateLabel(dashboard.monthly_summary.high_date)
+    : "No data";
+  const chartInsight = guidance.chartInsight;
+
+  app.innerHTML = buildDashboardHtml({
+    dashboard,
+    live,
+    guidance,
+    liveAvailable,
+    priceLabel,
+    chartInsight,
+    secondaryPriceText,
+    lowDate,
+    highDate,
+    monthlyLow:
+      dashboard.monthly_summary?.low_price ??
+      dashboard.chart.lowest?.retail_22k_inr_per_gram ??
+      dashboard.chart.lowest?.display_price_value,
+    monthlyHigh:
+      dashboard.monthly_summary?.high_price ??
+      dashboard.chart.highest?.retail_22k_inr_per_gram ??
+      dashboard.chart.highest?.display_price_value,
+    advancedInsights,
+  });
+
+  attachDashboardEvents();
+  renderChart();
+  return;
 
   app.innerHTML = `
     <main class="screen">
@@ -507,7 +825,7 @@ else strength = "Strong";
             <div class="headline-price">
               <strong>${escapeHtml(
                 liveAvailable
-                  ? formatCurrency(live.price_per_gram)
+                  ? formatCurrency(live.primary_price_inr_per_gram)
                   : live?.live_error || "Live data unavailable",
               )}</strong>
               <span class="change-pill ${priceMetrics.className}">${
@@ -518,9 +836,19 @@ else strength = "Strong";
             </div>
             <div class="footer-note">
               ${
+                secondaryPriceText
+                  ? `<span class="meta">${escapeHtml(secondaryPriceText)}</span>`
+                  : ""
+              }
+              ${
                 live.freshness_label
                   ? `<span class="meta">${escapeHtml(live.freshness_label)}</span>`
                   : '<span class="meta">Last updated unavailable</span>'
+              }
+              ${
+                live.primary_price_label
+                  ? `<span class="badge">${escapeHtml(live.primary_price_label)}</span>`
+                  : ""
               }
               ${
                 live.delayed_message
@@ -558,15 +886,19 @@ else strength = "Strong";
             </p>
 
             <div class="impact-box">
-              <strong>${escapeHtml(formatCurrency(roundedDistanceFromLow))} above the lowest price this cycle</strong>
+              <strong>${escapeHtml(formatCurrency(roundedDistanceFromLow))} above the 30-day spot low</strong>
             </div>
-            <p class="loss-framing">You’ve already missed the lowest price this cycle.</p>
+            <p class="loss-framing">${
+              live.retail_price_is_modeled
+                ? "Headline price is modeled from spot using a retail multiplier. Analytics still use 24K spot history."
+                : "Headline price uses retail 22K. Analytics still use 24K spot history."
+            }</p>
 
             ${
               prediction
                 ? `<div class="prediction-box">
                     <div class="prediction-main">
-                      <span>3-day price outlook</span>
+                      <span>3-day ${escapeHtml(rangeContextLabel)} outlook</span>
                       <strong>
                         ${escapeHtml(formatCurrency(prediction.expected))}
                       </strong>
@@ -574,7 +906,7 @@ else strength = "Strong";
 
                     <div class="prediction-direction">
                       ${escapeHtml(predictionDirection)}
-                      <div class="prediction-anchor">Based on recent price movement</div>
+                      <div class="prediction-anchor">Derived from recent 24K spot movement</div>
                     </div>
 
                     <div class="prediction-range">
@@ -603,7 +935,7 @@ else strength = "Strong";
           <div class="chart-header">
             <div>
               <p class="eyebrow">Trend</p>
-              <h3>Price trend</h3>
+              <h3>24K spot trend</h3>
             </div>
             <div class="range-selector">
               ${["1W", "1M", "3M", "6M", "1Y"]
@@ -617,23 +949,23 @@ else strength = "Strong";
             </div>
           </div>
           <div class="chart-wrap">
-            <canvas id="goldChart" aria-label="Gold price chart"></canvas>
+            <canvas id="goldChart" aria-label="Gold spot price chart"></canvas>
           </div>
           <p class="meta" id="chartMeta"></p>
         </section>
 
         <section class="stats-grid">
           <article class="card stat-card panel">
-            <p class="stat-label">Lowest price this cycle</p>
-            <div class="stat-value">${escapeHtml(formatCurrency(dashboard.chart.lowest?.price_per_gram))}</div>
+            <p class="stat-label">${getRangeLabel(state.selectedRange)} low</p>
+            <div class="stat-value">${escapeHtml(formatCurrency(dashboard.chart.lowest?.spot_24k_inr_per_gram))}</div>
             <p class="meta">${escapeHtml(
               dashboard.chart.lowest ? formatDateLabel(dashboard.chart.lowest.date) : "No data",
             )}</p>
           </article>
 
           <article class="card stat-card panel">
-            <p class="stat-label">Cycle high</p>
-            <div class="stat-value">${escapeHtml(formatCurrency(dashboard.chart.highest?.price_per_gram))}</div>
+            <p class="stat-label">${getRangeLabel(state.selectedRange)} high</p>
+            <div class="stat-value">${escapeHtml(formatCurrency(dashboard.chart.highest?.spot_24k_inr_per_gram))}</div>
             <p class="meta">${escapeHtml(
               dashboard.chart.highest ? formatDateLabel(dashboard.chart.highest.date) : "No data",
             )}</p>
@@ -643,6 +975,17 @@ else strength = "Strong";
             <p class="stat-label">Days left</p>
             <div class="stat-value">${escapeHtml(daysLeft.value)}</div>
             <p class="meta">${escapeHtml(daysLeft.meta)}</p>
+          </article>
+
+          <article class="card stat-card panel">
+            <p class="stat-label">Buy Cycle</p>
+            <div class="cycle-info">
+              ${dashboard.paymentWindow?.lastPaymentDate ? `<p class="info-line">Last purchased: ${escapeHtml(formatDateLabel(dashboard.paymentWindow.lastPaymentDate))}</p>` : `<p class="info-line">Not yet purchased</p>`}
+              ${dashboard.paymentWindow?.nextCycleDate ? `<p class="info-line">Next available: ${escapeHtml(formatDateLabel(dashboard.paymentWindow.nextCycleDate))}</p>` : `<p class="info-line">Next available: Anytime</p>`}
+            </div>
+            <button id="markBoughtBtn" class="button button-primary" style="margin-top: 12px; width: 100%; cursor: pointer;">
+              Mark as bought
+            </button>
           </article>
         </section>
 
@@ -671,22 +1014,55 @@ function renderChart() {
 
   const context = canvas.getContext("2d");
   const gradient = context.createLinearGradient(0, 0, 0, 220);
-  gradient.addColorStop(0, "rgba(212, 175, 55, 0.28)");
-  gradient.addColorStop(1, "rgba(212, 175, 55, 0.02)");
+  gradient.addColorStop(0, "rgba(37, 211, 102, 0.18)");
+  gradient.addColorStop(1, "rgba(37, 211, 102, 0.01)");
 
   const points = state.dashboard.chart.points;
   const lowestDate = state.dashboard.chart.lowest?.date;
   const highestDate = state.dashboard.chart.highest?.date;
   const todayDate = state.dashboard.chart.today?.date;
+  const values = points
+    .map((point) => Number(point.spot_24k_inr_per_gram))
+    .filter((value) => Number.isFinite(value));
+  const minValue = values.length ? Math.min(...values) : null;
+  const maxValue = values.length ? Math.max(...values) : null;
+  const rangeSize =
+    minValue === null || maxValue === null ? null : Math.max(1, maxValue - minValue);
+  const zonePlugin = {
+    id: "rangeZones",
+    beforeDatasetsDraw(chart) {
+      if (minValue === null || maxValue === null) {
+        return;
+      }
+
+      const { ctx, chartArea, scales } = chart;
+      if (!chartArea || !scales?.y) {
+        return;
+      }
+
+      const lowerBandEnd = minValue + rangeSize * 0.25;
+      const upperBandStart = maxValue - rangeSize * 0.2;
+      const lowerY = scales.y.getPixelForValue(lowerBandEnd);
+      const upperY = scales.y.getPixelForValue(upperBandStart);
+
+      ctx.save();
+      ctx.fillStyle = "rgba(22, 163, 74, 0.08)";
+      ctx.fillRect(chartArea.left, lowerY, chartArea.right - chartArea.left, chartArea.bottom - lowerY);
+      ctx.fillStyle = "rgba(245, 158, 11, 0.08)";
+      ctx.fillRect(chartArea.left, chartArea.top, chartArea.right - chartArea.left, upperY - chartArea.top);
+      ctx.restore();
+    },
+  };
 
   state.chart = new Chart(context, {
     type: "line",
+    plugins: [zonePlugin],
     data: {
       labels: points.map((point) => formatDateLabel(point.date)),
       datasets: [
         {
-          data: points.map((point) => Number(point.price_per_gram)),
-          borderColor: "#D4AF37",
+          data: points.map((point) => Number(point.spot_24k_inr_per_gram)),
+          borderColor: "#25D366",
           backgroundColor: gradient,
           tension: 0.4,
           fill: true,
@@ -697,7 +1073,11 @@ function renderChart() {
               return 0;
             }
 
-            if (point.date === lowestDate || point.date === highestDate || point.date === todayDate) {
+            if (point.date === todayDate) {
+              return 5;
+            }
+
+            if (point.date === lowestDate || point.date === highestDate) {
               return 4;
             }
 
@@ -714,6 +1094,9 @@ function renderChart() {
             }
             if (point.date === highestDate) {
               return "#EF4444";
+            }
+            if (point.date === todayDate) {
+              return "#F8FAFC";
             }
             return "#D4AF37";
           },
@@ -734,7 +1117,7 @@ function renderChart() {
         tooltip: {
           enabled: true,
           backgroundColor: "#121826",
-          borderColor: "rgba(212, 175, 55, 0.22)",
+          borderColor: "rgba(37, 211, 102, 0.2)",
           borderWidth: 1,
           titleColor: "#E5E7EB",
           bodyColor: "#E5E7EB",
@@ -772,8 +1155,8 @@ function renderChart() {
 
   if (chartMeta) {
     chartMeta.textContent = `Low ${formatCurrency(
-      state.dashboard.chart.lowest?.price_per_gram,
-    )} • High ${formatCurrency(state.dashboard.chart.highest?.price_per_gram)}`;
+      state.dashboard.chart.lowest?.spot_24k_inr_per_gram,
+    )} - High ${formatCurrency(state.dashboard.chart.highest?.spot_24k_inr_per_gram)} - Trend uses stored spot history`;
   }
 }
 
@@ -782,6 +1165,14 @@ function attachDashboardEvents() {
   if (refresh) {
     refresh.addEventListener("click", refreshPrice);
   }
+
+  document.querySelectorAll("[data-mark-bought='true']").forEach((button) => {
+    button.addEventListener("click", markAsBought);
+  });
+
+  document.querySelectorAll("[data-guidance-action]").forEach((button) => {
+    button.addEventListener("click", handleGuidanceAction);
+  });
 
   const openSettings = document.getElementById("openSettings");
   if (openSettings) {
@@ -830,6 +1221,23 @@ function attachDashboardEvents() {
   document.getElementById("logoutButton")?.addEventListener("click", handleLogout);
 }
 
+function handleGuidanceAction(event) {
+  const action = event.currentTarget?.dataset?.guidanceAction;
+
+  if (action === "mark-bought") {
+    markAsBought();
+    return;
+  }
+
+  if (action === "refresh") {
+    refreshPrice();
+    return;
+  }
+
+  state.settingsOpen = true;
+  renderApp();
+}
+
 function renderApp() {
   destroyChart();
 
@@ -850,7 +1258,7 @@ async function loadTrend(range) {
   try {
     const trend = await requestJson(`/api/me/trends?range=${encodeURIComponent(range)}`);
     state.dashboard.chart = trend;
-    state.selectedRange = trend.range || range;
+    state.selectedRange = normalizeRangeValue(trend.range || range);
     renderApp();
   } catch (error) {
     state.flashMessage = error.message;
@@ -870,7 +1278,7 @@ async function loadDashboard(range = state.selectedRange) {
   state.alerts = alerts;
   state.nextTrigger = nextTrigger;
   state.user = dashboard.user;
-  state.selectedRange = dashboard.chart?.range || range;
+  state.selectedRange = normalizeRangeValue(dashboard.chart?.range || range);
 }
 
 async function initApp() {
@@ -943,7 +1351,7 @@ async function refreshPrice() {
       throw new Error(response.error || "Failed to refresh price");
     }
 
-    state.flashMessage = `Price refreshed in ${response.response_time_ms} ms.`;
+    state.flashMessage = `Dashboard refreshed from stored market data in ${response.response_time_ms} ms.`;
     state.flashType = "success";
     await loadDashboard(state.selectedRange);
     renderApp();
@@ -968,6 +1376,51 @@ async function refreshPrice() {
   }
 }
 
+async function markAsBought() {
+  const buttons = Array.from(
+    document.querySelectorAll(
+      "[data-mark-bought='true'], [data-guidance-action='mark-bought']",
+    ),
+  );
+  if (!buttons.length) {
+    return;
+  }
+
+  const originalLabels = buttons.map((button) => button.textContent);
+  buttons.forEach((button) => {
+    button.disabled = true;
+    button.textContent = "Recording...";
+  });
+
+  try {
+    const response = await requestJson("/api/mark-bought", {
+      method: "POST",
+    });
+
+    if (!response.success) {
+      throw new Error(response.error || "Failed to record purchase");
+    }
+
+    state.flashMessage = "Purchase recorded! Next cycle: " + response.nextCycleDate;
+    state.flashType = "success";
+    await loadDashboard(state.selectedRange);
+    renderApp();
+  } catch (error) {
+    console.error("MARK BOUGHT ERROR:", error);
+    state.flashMessage = error.message || "Failed to record purchase";
+    state.flashType = "error";
+    renderApp();
+  } finally {
+    Array.from(
+      document.querySelectorAll(
+        "[data-mark-bought='true'], [data-guidance-action='mark-bought']",
+      ),
+    ).forEach((button, index) => {
+      button.disabled = false;
+      button.textContent = originalLabels[index] || "Mark as bought";
+    });
+  }
+}
 
 async function handlePaymentDateSubmit(event) {
   event.preventDefault();

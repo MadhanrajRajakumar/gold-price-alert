@@ -89,7 +89,7 @@ router.post("/refresh-price", async (request, response, next) => {
     if (!refreshedPrice.is_live_available) {
       response.status(503).json({
         success: false,
-        error: refreshedPrice.live_error || "Unable to fetch live data",
+        error: refreshedPrice.live_error || "Stored market data is unavailable",
         response_time_ms: refreshedPrice.response_time_ms,
       });
       return;
@@ -97,7 +97,10 @@ router.post("/refresh-price", async (request, response, next) => {
 
     response.json({
       success: true,
-      price: refreshedPrice.price_per_gram,
+      primary_price_inr_per_gram: refreshedPrice.primary_price_inr_per_gram,
+      primary_price_label: refreshedPrice.primary_price_label,
+      secondary_price_inr_per_gram: refreshedPrice.secondary_price_inr_per_gram,
+      secondary_price_label: refreshedPrice.secondary_price_label,
       source: refreshedPrice.source,
       fetched_at: refreshedPrice.fetched_at,
       freshness_label: refreshedPrice.freshness_label,
