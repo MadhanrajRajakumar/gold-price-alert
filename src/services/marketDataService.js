@@ -488,17 +488,18 @@ function buildChartExtrema(points) {
     };
   }
 
-  const bySpotValue = [...points].sort(
+  const byDisplayValue = [...points].sort(
     (left, right) =>
-      left.spot_24k_inr_per_gram - right.spot_24k_inr_per_gram,
+      Number(left.display_price_value ?? left.retail_22k_inr_per_gram ?? 0) -
+      Number(right.display_price_value ?? right.retail_22k_inr_per_gram ?? 0),
   );
   const latestPoint = [...points].sort(
     (left, right) => new Date(right.timestamp) - new Date(left.timestamp),
   )[0];
 
   return {
-    lowest: bySpotValue[0],
-    highest: bySpotValue[bySpotValue.length - 1],
+    lowest: byDisplayValue[0],
+    highest: byDisplayValue[byDisplayValue.length - 1],
     today: latestPoint,
   };
 }

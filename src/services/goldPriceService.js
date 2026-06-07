@@ -9,6 +9,7 @@ const {
   buildAnalytics,
   getBuySignal,
   getLatestStoredPrice,
+  ingestRealtimeSnapshot,
   getPaymentWindowRange,
   getPricePosition,
   getPriceRangePayload,
@@ -182,9 +183,7 @@ function formatNextTriggerLabel(
 }
 
 function getRetailHeadlineLabel(entry) {
-  return entry?.retail_price_is_modeled
-    ? "Modeled retail 22K"
-    : "Retail 22K";
+  return "Chennai 22K Gold";
 }
 
 function getRangeContextLabel(entry) {
@@ -268,16 +267,18 @@ async function storeDailyGoldPrice(_userId, _city = DEFAULT_CITY, referenceDate 
 
 async function refreshGoldPriceForUser(userId, referenceDate = new Date()) {
   const startedAt = Date.now();
-  const livePrice = await fetchLatestGoldPrice(userId, DEFAULT_CITY, referenceDate);
+  const snapshot = await ingestRealtimeSnapshot();
   const durationMs = Date.now() - startedAt;
 
   await logActivity(userId, "manual_refresh_requested", {
     requested_at: referenceDate.toISOString(),
-    result: livePrice.status,
+    result: "available",
   });
 
   return {
-    ...livePrice,
+    status: "available",
+    is_live_available: true,
+    ...serializeStoredPrice(snapshot, referenceDate),
     response_time_ms: durationMs,
   };
 }
@@ -327,6 +328,10 @@ async function buildDecision({ currentPrice, lastPaymentDate, referenceDate = ne
   const decision = getBuySignal(currentPrice, low, high);
   const daysLeft = lastPaymentDate ? getDaysLeft(lastPaymentDate, referenceDate) : 30;
   const urgency = Number(Math.max(0, Math.min(1, (30 - daysLeft) / 30)).toFixed(4));
+  const retailDistanceFromLow =
+    currentRetailPrice === null || retailLow === null
+      ? null
+      : Number((currentRetailPrice - retailLow).toFixed(2));
 
   return {
     decision,
@@ -351,6 +356,7 @@ async function buildDecision({ currentPrice, lastPaymentDate, referenceDate = ne
     deviationPercent: Number((((currentPrice - low) / (low || currentPrice || 1)) * 100).toFixed(2)),
     deviation: Number((currentPrice - low).toFixed(2)),
     distanceFromLow: Number((currentPrice - low).toFixed(2)),
+    displayDistanceFromLow: retailDistanceFromLow,
     dataPoints: analytics.monthly_data_points,
     coverageRatio: analytics.coverage_ratio,
     validationRatio: analytics.validation_ratio,
@@ -447,6 +453,7 @@ async function getDashboardSummary(
         deviationPercent: 0,
         deviation: 0,
         distanceFromLow: 0,
+        displayDistanceFromLow: 0,
         extraCost: 0,
         dataPoints: 0,
         coverageRatio: 0,
@@ -492,6 +499,7 @@ async function getDashboardSummary(
         display_price_model_version:
           livePrice.retail_price_model_version || "spot_multiplier_v1",
         distance_from_low: decisionData.distanceFromLow,
+        display_distance_from_low: decisionData.displayDistanceFromLow,
         extra_cost: decisionData.extraCost,
         data_points: decisionData.dataPoints,
         coverage_ratio: decisionData.coverageRatio,
@@ -521,6 +529,7 @@ async function getDashboardSummary(
       urgency: decisionData.urgency,
       trend: decisionData.trend,
       distance_from_low: decisionData.distanceFromLow,
+      display_distance_from_low: decisionData.displayDistanceFromLow,
       extra_cost: decisionData.extraCost,
       coverage_ratio: decisionData.coverageRatio,
       validation_ratio: decisionData.validationRatio,
@@ -528,14 +537,13 @@ async function getDashboardSummary(
       live_price_source: livePrice.retail_price_source || "modeled_spot_multiplier",
       live_price_model_version:
         livePrice.retail_price_model_version || "spot_multiplier_v1",
+      debug_pricing_enabled: process.env.NODE_ENV !== "production",
     },
     chart,
     payment_trend: paymentTrend,
     paymentWindow,
     message: livePrice.is_live_available
-      ? livePrice.retail_price_is_modeled
-        ? "Using spot history for analytics and a modeled retail 22K headline price"
-        : "Using spot history for analytics and a retail 22K headline price"
+      ? "Showing Chennai 22K Gold across the full display experience"
       : "No stored market data available yet",
   };
 }
@@ -556,7 +564,7 @@ function buildAlertMessages(summary) {
     messages.push({
       type: "LOWEST",
       subject: "Gold Price Alert: Near 30-day low",
-      text: `Gold spot is near the 30-day low at INR ${spotCurrent.toFixed(2)}/g. ${retailContextLabel} 22K is INR ${retailCurrent.toFixed(2)}/g. BUY.`,
+      text: `Chennai 22K Gold is near the 30-day low at INR ${retailCurrent.toFixed(2)}/g. BUY.`,
     });
   }
 
@@ -579,7 +587,7 @@ function buildAlertMessages(summary) {
   messages.push({
     type: "DAILY",
     subject: "Gold Price Alert: Daily summary",
-    text: `${retailContextLabel} 22K: INR ${retailCurrent.toFixed(2)}/g. Spot 24K: INR ${spotCurrent.toFixed(2)}/g. Signal: ${buySignal}.`,
+    text: `Chennai 22K Gold: INR ${retailCurrent.toFixed(2)}/g. Signal: ${buySignal}.`,
   });
 
   return messages;
@@ -819,11 +827,19 @@ async function buildGoldAlert(userId) {
   return `Gold Alert
 
 ${retailContextLabel} 22K: INR ${retailPrice.toFixed(2)}/g
-Spot 24K: INR ${spotPrice.toFixed(2)}/g
-30-day spot low: INR ${Number(low).toFixed(2)}/g
-30-day spot high: INR ${Number(high).toFixed(2)}/g
+30-day low: INR ${estimateRetailDisplay(low).toFixed(2)}/g
+30-day high: INR ${estimateRetailDisplay(high).toFixed(2)}/g
 Signal: ${signal}
 Days left: ${daysLeft}`;
+}
+
+function estimateRetailDisplay(value) {
+  if (!Number.isFinite(Number(value))) {
+    return 0;
+  }
+
+  const { estimateRetail22KFromSpot24K } = require("./goldApiClient");
+  return estimateRetail22KFromSpot24K(Number(value));
 }
 
 module.exports = {

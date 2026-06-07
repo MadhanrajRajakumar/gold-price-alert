@@ -269,7 +269,9 @@ function getGuidanceModel(dashboard) {
   const livePrice = getNumber(
     live?.display_price_value ?? live?.primary_price_inr_per_gram,
   );
-  const distanceFromLow = getNumber(meta?.distance_from_low);
+  const distanceFromLow = getNumber(
+    meta?.display_distance_from_low ?? meta?.distance_from_low,
+  );
   const isLiveAvailable =
     live?.is_live_available === true && livePrice !== null;
 
@@ -317,7 +319,7 @@ function getGuidanceModel(dashboard) {
         : `Price is in the upper ${100 - rangePercent}% from the top of the monthly range.`;
     actionWindow = "Wait and review again in 3 to 5 days";
   } else if (distanceFromLow !== null) {
-    shortReason = `${formatCurrency(distanceFromLow)} above the monthly low.`;
+    shortReason = `${formatCurrency(distanceFromLow)} above the displayed monthly low.`;
     actionWindow = "No rush. Recheck after the next update";
   }
 
@@ -580,12 +582,12 @@ function buildDashboardHtml({
   liveAvailable,
   priceLabel,
   chartInsight,
-  secondaryPriceText,
   lowDate,
   highDate,
   monthlyLow,
   monthlyHigh,
   advancedInsights,
+  debugPricingEnabled,
 }) {
   return `
     <main class="screen">
@@ -661,7 +663,7 @@ function buildDashboardHtml({
             </div>
           </div>
           <div class="chart-wrap">
-            <canvas id="goldChart" aria-label="Gold spot price chart"></canvas>
+            <canvas id="goldChart" aria-label="Chennai 22K Gold chart"></canvas>
           </div>
           <p class="meta" id="chartMeta"></p>
         </section>
@@ -691,14 +693,6 @@ function buildDashboardHtml({
 
             <div class="advanced-grid">
               <article class="card stat-card panel">
-                <p class="stat-label">Signal basis</p>
-                <div class="technical-copy">
-                  <p>${escapeHtml(advancedInsights.signal_basis || "-")}</p>
-                  <p>Display: ${escapeHtml(advancedInsights.display_basis || "-")}</p>
-                </div>
-              </article>
-
-              <article class="card stat-card panel">
                 <p class="stat-label">Data quality</p>
                 <div class="technical-copy">
                   <p>Coverage: ${escapeHtml(`${Math.round((advancedInsights.coverage_ratio || 0) * 100)}%`)}</p>
@@ -711,11 +705,7 @@ function buildDashboardHtml({
                 <p class="stat-label">Price context</p>
                 <div class="technical-copy">
                   <p>${escapeHtml(chartInsight)}</p>
-                  ${
-                    secondaryPriceText
-                      ? `<p>Reference: ${escapeHtml(secondaryPriceText)}</p>`
-                      : ""
-                  }
+                  <p>All visible prices use Chennai 22K Gold.</p>
                 </div>
               </article>
 
@@ -729,13 +719,29 @@ function buildDashboardHtml({
                       : `${Math.round(Number(advancedInsights.display_range_position) * 100)}%`,
                   )}</p>
                   <p>Distance from low: ${escapeHtml(
-                    advancedInsights.distance_from_low === null ||
-                      advancedInsights.distance_from_low === undefined
+                    advancedInsights.display_distance_from_low === null ||
+                      advancedInsights.display_distance_from_low === undefined
                       ? "-"
-                      : formatCurrency(advancedInsights.distance_from_low),
+                      : formatCurrency(advancedInsights.display_distance_from_low),
                   )}</p>
                 </div>
               </article>
+              ${
+                debugPricingEnabled
+                  ? `<article class="card stat-card panel">
+                      <p class="stat-label">Debug pricing</p>
+                      <div class="technical-copy">
+                        <p>Signal basis: ${escapeHtml(advancedInsights.signal_basis || "-")}</p>
+                        <p>Display basis: ${escapeHtml(advancedInsights.display_basis || "-")}</p>
+                        <p>Spot reference: ${escapeHtml(
+                          live?.secondary_price_inr_per_gram
+                            ? formatCurrency(live.secondary_price_inr_per_gram)
+                            : "-",
+                        )}</p>
+                      </div>
+                    </article>`
+                  : ""
+              }
             </div>
           </details>
         </section>
@@ -761,11 +767,8 @@ function renderDashboard() {
   const live = dashboard.live_price || {};
   const guidance = getGuidanceModel(dashboard);
   const advancedInsights = dashboard?.advanced_insights || {};
+  const debugPricingEnabled = advancedInsights.debug_pricing_enabled === true;
   const liveAvailable = live?.is_live_available === true;
-  const secondaryPriceText =
-    liveAvailable && live.secondary_price_inr_per_gram
-      ? `${live.secondary_price_label || "Spot 24K"} ${formatCurrency(live.secondary_price_inr_per_gram)}`
-      : "";
   const priceLabel =
     live.primary_price_label || `${dashboard.user.city || "Chennai"} 22K`;
   const lowDate = dashboard.monthly_summary?.low_date
@@ -783,7 +786,6 @@ function renderDashboard() {
     liveAvailable,
     priceLabel,
     chartInsight,
-    secondaryPriceText,
     lowDate,
     highDate,
     monthlyLow:
@@ -795,6 +797,7 @@ function renderDashboard() {
       dashboard.chart.highest?.retail_22k_inr_per_gram ??
       dashboard.chart.highest?.display_price_value,
     advancedInsights,
+    debugPricingEnabled,
   });
 
   attachDashboardEvents();
@@ -1022,7 +1025,7 @@ function renderChart() {
   const highestDate = state.dashboard.chart.highest?.date;
   const todayDate = state.dashboard.chart.today?.date;
   const values = points
-    .map((point) => Number(point.spot_24k_inr_per_gram))
+    .map((point) => Number(point.display_price_value ?? point.retail_22k_inr_per_gram))
     .filter((value) => Number.isFinite(value));
   const minValue = values.length ? Math.min(...values) : null;
   const maxValue = values.length ? Math.max(...values) : null;
@@ -1061,7 +1064,9 @@ function renderChart() {
       labels: points.map((point) => formatDateLabel(point.date)),
       datasets: [
         {
-          data: points.map((point) => Number(point.spot_24k_inr_per_gram)),
+          data: points.map((point) =>
+            Number(point.display_price_value ?? point.retail_22k_inr_per_gram),
+          ),
           borderColor: "#25D366",
           backgroundColor: gradient,
           tension: 0.4,
@@ -1155,8 +1160,12 @@ function renderChart() {
 
   if (chartMeta) {
     chartMeta.textContent = `Low ${formatCurrency(
-      state.dashboard.chart.lowest?.spot_24k_inr_per_gram,
-    )} - High ${formatCurrency(state.dashboard.chart.highest?.spot_24k_inr_per_gram)} - Trend uses stored spot history`;
+      state.dashboard.chart.lowest?.display_price_value ??
+        state.dashboard.chart.lowest?.retail_22k_inr_per_gram,
+    )} - High ${formatCurrency(
+      state.dashboard.chart.highest?.display_price_value ??
+        state.dashboard.chart.highest?.retail_22k_inr_per_gram,
+    )} - Trend uses Chennai 22K Gold values`;
   }
 }
 

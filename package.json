@@ -5,6 +5,7 @@
   "main": "api/index.js",
   "scripts": {
     "audit:market-data": "node src/scripts/auditMarketData.js",
+    "validate:retail-display": "node src/scripts/validateRetailDisplaySeries.js",
     "build": "prisma generate",
     "backfill:gold": "node src/scripts/backfillGoldHistory.js",
     "backfill:gold:force": "node src/scripts/backfillGoldHistory.js --force",
